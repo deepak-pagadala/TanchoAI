@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "tancho-d3641",
+  "private_key_id": "d700fb2992323681a5f6c25750dabc8b6aaeced9",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC6vyA/ONXf5FcG\nMCcG9Pf2Au+k6hxRmr/CzFNDgYgywak1velRc/shJO/7tBb1sfOwDETQGoDxjqN+\nLkhGu/ynXa4iFHB24I+5/NS05lLhVSmkGMV0c8uqF3CWr1yOCupnMLBcZUiNON7d\nsA01hCk4tgEiKB8mymw8fX6/sUJIac9+Im5Fhvlc8gMTy54oufOonjteNh9O19Hr\njOFBin/qoDBLepEBSLzw4G2tCpBTvLnx+vHsP3ol0Kf+3905p3ERtcIadWJtIksA\nf/99LEjhM7PGDsDOpAoRg0NpCujtFUiSOGc9b6QYNfvXTYq7skDwPpk1/vdfCQyx\nPI4IF9mPAgMBAAECggEAEpTb546HMWzt/86gw39ygMcQA0/MG46TUBW2nzvvSmWc\nqZ1I7vLkZQrg2iG0OyRGxBikbDSG6gIwYGjIhklEPX8DyZ5RBnMXugDfRVS5oHQx\n3YMdepXfCQCmEkhGpFePtU7R7Y+iZXLoMhTHa7DHzT3G5Rgq6Vgw5t/x0a8Ykk3R\naqOE2MbS/z1oxNoAJpb1MzsqUQUoI5xBPfFAo7MP3AsrahvSz3xp2tLs1KNvBUiR\nscu/6G3/3jlYjRy5YD983MewW0HeOmKz54Bcvc6mW1FXyk5nPn8wVzntwG7Vd54A\nUsgwDO2eGzm3t9jBTd8Ix2rNomFdcz1IOGJ66dNemQKBgQDkgFtNBK9i9BY7nNnw\ntSp1cp5PpVCmvDlxTPt8mPaBG1C+sdg3NK4l0IpR+Fwn7ptdVfL5UcHW0NRmDl+9\n6yUQYVi6BtYAHCNYj3U/mVIQL6AipGc5LAqyw88pf1k+8fCEYSJb2jc84tnyqxIF\nhBlnwTbnjgMYKkduKF2nSSflWwKBgQDROGRqsWg42xUsdvP+YLZn3afD/HDAWFg6\nxGSd0dmJxzjaQB36CY/6NCGEMBjtc2WhxHL/2+/n3gahZXpVDTqcMXXqZl6C2eP3\nLwoIjK9OZ4xMzCSzh35+vcYfFKiFVfe9cqpyCskbIg01WtonuEVSUMTWAG6C4yZg\nPuGtTLmu3QKBgFJqkYPICtJwI4zA2ELftT7DZqJniB17imR5VcPtEAwlJAyD7O6M\ni7uL6jgCkoq8n0Ec/RQ8DuRCUjm1OYcwxx+PXQdL6+gCPiV1KN8Vl+nKo8Ga9rhC\nUGGGCrR3AGOZtByrRE9I9994GxBR76AZs2ge4oTGTgtrRHRRDuaFlmQ9AoGBAM8R\nkBkk0rEK7C7g4GYQlBfCgktv6qwEA/bN74NfcX1yhqtDsCeLFUueEtoAvHsurhTo\nGKVwqUWEMm3EwMmy2SJDtZ+zh7DcNEqt7LE/hDYGOA6+MUjaPnD0JEUYrh2hUxvW\nhClw0U+gaRA4hhevwjRRKi9fqAC1DoNNWRCrEk+lAoGBAN8QAI20PCj91DLm28It\nHBUOu78Tt9w+fTAnEpnKWg68PeXDb2mdy2vvegU9aq+XtbkV4V81K1y8O+NuSVMb\nPJ/HftM7YCprZb+jhxeQJ5CvC25e9fPIeCSUTi/XoqMAYvqAaobnp4rmjM7gfFhS\nDxwI2gUQagQaBmaIUTjpj97A\n-----END PRIVATE KEY-----\n",
+  "client_email": "tancho-proxy-sa@tancho-d3641.iam.gserviceaccount.com",
+  "client_id": "105175085482839530214",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/tancho-proxy-sa%40tancho-d3641.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
