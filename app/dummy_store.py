@@ -9,3 +9,13 @@ def write_turns(uid, user_msg, assistant_msg):
         {"role": "user", "content": user_msg},
         {"role": "assistant", "content": assistant_msg}
     ])
+
+
+_topic_counts: dict[str, dict[str, int]] = {}  # uid -> {topic: count}
+
+def inc_topic(uid: str, topic: str):
+    _topic_counts.setdefault(uid, {})
+    _topic_counts[uid][topic] = _topic_counts[uid].get(topic, 0) + 1
+
+def topic_hits(uid: str, topic: str) -> int:
+    return _topic_counts.get(uid, {}).get(topic, 0)

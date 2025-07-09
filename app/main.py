@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from app.dummy_store import get_history, write_turns   # in-memory store
 from app.prompts import PROMPTS
-
+from app.resources import match_resources
+from app.dummy_store import inc_topic, topic_hits
 # ──────────────────────────── config ────────────────────────────
 HISTORY_WINDOW = 6       # how many recent turns to send verbatim
 SUMMARY_THRESHOLD = 40   # how many total turns before we start summarising
@@ -111,5 +112,52 @@ async def chat(body: ChatRequest):
         except Exception as e:
             print("ERROR:", e, file=sys.stderr)
             yield f"event: error\ndata: {str(e)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+class MentorReq(BaseModel):
+    uid: str
+    question: str
+
+@app.post("/mentor", response_class=StreamingResponse)
+async def mentor(body: MentorReq):
+
+    uid, q = body.uid, body.question
+    topic = q.split()[0]          # naïve topic extractor
+    inc_topic(uid, topic)
+
+    resources = match_resources(topic)
+    res_lines = "\n".join(
+        f"- {r['title']} ({r['type']})" for r in resources
+    ) or "NONE"
+
+    system_prompt = PROMPTS["mentor"] + f"\n\nAVAILABLE_RESOURCES:\n{res_lines}"
+
+    # include history to keep context
+    messages = (
+        [{"role": "system", "content": system_prompt}]
+        + get_history(uid)
+        + [{"role": "user", "content": q}]
+    )
+
+    # same streaming generator pattern as /chat
+    async def event_stream():
+        answer_text = ""
+        try:
+            stream = await client.chat.completions.create(
+                model="gpt-4o",
+                stream=True,
+                messages=messages,
+            )
+            async for chunk in stream:
+                token = chunk.choices[0].delta.content or ""
+                answer_text += token
+                yield f"data: {token}\n\n"
+            yield "event: done\ndata:[DONE]\n\n"
+            write_turns(uid, q, answer_text)
+
+        except Exception as e:
+            yield f"event: error\ndata: {e}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
