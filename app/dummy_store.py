@@ -19,3 +19,13 @@ def inc_topic(uid: str, topic: str):
 
 def topic_hits(uid: str, topic: str) -> int:
     return _topic_counts.get(uid, {}).get(topic, 0)
+
+
+# add near the existing in-memory dicts
+_user_mem: dict[str, dict] = {}
+
+def remember_resource(uid: str, title: str) -> None:
+    _user_mem.setdefault(uid, {})["last_resource"] = title
+
+def last_resource(uid: str) -> str | None:
+    return _user_mem.get(uid, {}).get("last_resource")
