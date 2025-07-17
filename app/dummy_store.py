@@ -29,3 +29,23 @@ def remember_resource(uid: str, title: str) -> None:
 
 def last_resource(uid: str) -> str | None:
     return _user_mem.get(uid, {}).get("last_resource")
+
+
+# Simple in-memory store for “pending” calendar events
+_pending_calendar: dict[str, dict] = {}
+
+def save_pending_calendar_event(uid: str, ev: dict) -> None:
+    """
+    ev should contain keys:
+     - summary (str)
+     - start (datetime)
+     - duration (int, minutes)
+     - description (str, optional)
+    """
+    _pending_calendar[uid] = ev
+
+def get_pending_calendar_event(uid: str) -> dict | None:
+    return _pending_calendar.get(uid)
+
+def clear_pending_calendar_event(uid: str) -> None:
+    _pending_calendar.pop(uid, None)

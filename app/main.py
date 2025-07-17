@@ -201,6 +201,32 @@ async def chat(body: ChatRequest):
 # ===============================================================
 # 2. Mentor endpoint  (resource- & calendar-aware)
 # ===============================================================
+
+from app.dummy_store import (
+    save_pending_calendar_event,
+    get_pending_calendar_event,
+    clear_pending_calendar_event,
+)
+
+class ConfirmReq(BaseModel):
+    uid: str
+    confirmation: str
+@app.post("/mentor/confirm")
+async def mentor_confirm(body: ConfirmReq):
+    pending = get_pending_calendar_event(body.uid)
+    if not pending:
+        return JSONResponse({"message": "No pending event found."}, status_code=400)
+
+    ans = body.confirmation.strip().lower()
+    if ans.startswith(("y", "yes", "sure", "okay")):
+        # We won’t create the event server-side—iOS will handle that.
+        clear_pending_calendar_event(body.uid)
+        return {"message": "Great! I’ve queued it on your device’s calendar."}
+    else:
+        clear_pending_calendar_event(body.uid)
+        return {"message": "No problem—let me know if you change your mind."}
+
+    
 class MentorReq(BaseModel):
     uid: str
     question: str
