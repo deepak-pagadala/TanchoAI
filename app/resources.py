@@ -78,7 +78,7 @@ def match_resources(query: str, limit: int = TOP_K) -> list[dict]:
     # ——— vector search ———
     try:
         vec   = _embed(query)
-        resp  = _coll.query(vec, top_k=limit)
+        resp  = _coll.query(vec, n_results=limit)
         hits  = [h["metadata"] for h in resp] if resp else []
     except Exception as e:            # DB missing? embedding error?
         print("Vector search failed →", e)

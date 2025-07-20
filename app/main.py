@@ -100,7 +100,10 @@ def _context_snippet(topic: str, k=3) -> str:
 
 async def _conversation_reply(uid:str, mode:str, user_msg:str)->Dict:
     history       = get_history(uid)
-    system_prompt = PROMPTS[mode]
+    user_name     = body.name or "フレンド"
+    template      = PROMPTS[mode]
+    system_prompt = template.format(USER_NAME=user_name)
+
     if ctx := _history_context(history):
         system_prompt += "\n\nLast turns:\n" + ctx
     messages = (
@@ -169,12 +172,15 @@ class ChatRequest(BaseModel):
     uid: str
     mode: Literal["convFormal","convCasual"]
     userMessage: str
+    name: Optional[str] = None
 
 @app.post("/chat")
 async def chat(body: ChatRequest):
-    uid, mode, user_msg = body.uid, body.mode, body.userMessage
+    uid, mode, user_msg, user_name = body.uid, body.mode, body.userMessage,  body.name or "there"
     history       = get_history(uid)
-    system_prompt = PROMPTS[mode]
+    template      = PROMPTS[body.mode]
+    system_prompt = template.format(USER_NAME=user_name)
+
 
     if ctx := _history_context(history):
         system_prompt += "\n\nLast turns:\n" + ctx
@@ -184,7 +190,7 @@ async def chat(body: ChatRequest):
     messages = (
         [{"role":"system","content":system_prompt}]
         + history[-HISTORY_WINDOW:]
-        + [{"role":"user","content":user_msg}]
+        + [{"role":"user","content":body.userMessage}]
     )
 
     try:
@@ -231,10 +237,11 @@ class MentorReq(BaseModel):
     uid: str
     question: str
     freeSlot: Optional[str] = None     # ISO-8601 start of free hour
+    name: Optional[str] = None
 
 @app.post("/mentor", response_class=StreamingResponse)
 async def mentor(body: MentorReq):
-    uid, q, free_slot_iso = body.uid, body.question, body.freeSlot
+    uid, q, free_slot_iso, user_name = body.uid, body.question, body.freeSlot, body.name or "there"
 
     # 1️⃣ explicit request?
     explicit = _wants_resources(q)
@@ -266,9 +273,14 @@ async def mentor(body: MentorReq):
         res_lines = "NONE"
 
     # 6️⃣ build system prompt
+    template    = PROMPTS["mentor"]
+    base_prompt = template.format(USER_NAME=user_name)
+
+# 3) Build out the rest of your system prompt
     sys_prompt = (
-        PROMPTS["mentor"]
-        + "\n\n### RESOURCE_CONTEXT\n" + (_context_snippet(topic) if topic else "")
+        base_prompt
+        + "\n\n### RESOURCE_CONTEXT\n"
+        + ( _context_snippet(topic) if topic else "" )
         + f"\n\nTOPIC_HITS: {RECOMMEND_AFTER_N_HITS if force_reco else hits}"
         + f"\n\nAVAILABLE_RESOURCES:\n{res_lines}"
     )
