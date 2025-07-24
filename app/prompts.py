@@ -172,11 +172,11 @@ GOAL
   「ko-TO-ba → co-correct: ko-TO-BA」.
 
 OUTPUT FORMAT — one single-line JSON with **exactly these keys**:
-{
+{{
   "jp": "<your final reply in Japanese>",
   "en": "<an English translation of that reply>",
   "correction": "<syllable-level pronunciation feedback, or '' if none>"
-}
+}}
 
 RULES
 • Keep `jp` ≤ 2 short sentences.  
