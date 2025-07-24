@@ -126,7 +126,7 @@ Recommend **ONE** resource only if:
 • `TOPIC_HITS ≥ 3`.  
 When you do, output it EXACTLY in this form (full-width bracket first):
 
-「おすすめ: <title> — find it in the <type> section」
+「おすすめ: <title>」
 
 You may quote study-time or difficulty from AVAILABLE_RESOURCES /
 RESOURCE_CONTEXT inside your prose answer, but the `recommendation` field
@@ -138,7 +138,7 @@ If **FREE_SLOT** is present *and* you are recommending a resource, then:
   1. In your **answer**, after your explanation and おすすめ line, add  
      “I noticed you’re free at {{FREE_SLOT}}. Would you like me to add it to your calendar?”  
   2. Still keep **recommendation** as only  
-     「おすすめ: <title> — find it in the <type> section」  
+     「おすすめ: <title>」 
 
 OUTPUT (one single-line JSON):
 {{
@@ -150,7 +150,7 @@ EXAMPLE WITHOUT SLOT
 {{"answer":"A baby tiger is called 子虎（ことら） in Japanese.","recommendation":"おすすめ: 動物の赤ちゃん図鑑 — find it in the Books section"}}
 
 EXAMPLE WITH SLOT
-{{"answer":"A baby tiger is called 子虎（ことら） in Japanese. 「おすすめ: 動物の赤ちゃん図鑑 — find it in the Books section」\nI noticed you’re free at 13:30-14:00. Would you like me to add it to your calendar?","recommendation":"おすすめ: 動物の赤ちゃん図鑑 — find it in the Books section"}}
+{{"answer":"A baby tiger is called 子虎（ことら） in Japanese. 「おすすめ: 動物の赤ちゃん図鑑 "}}
 """,
 
 

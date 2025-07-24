@@ -19,7 +19,8 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from fastapi import File, UploadFile, Form
 from fastapi.staticfiles import StaticFiles
-
+from datetime import datetime, timedelta, timezone
+import calendar, json, zoneinfo
 
 # ───────── external helper libs ──────────
 from langdetect import detect              # pip install langdetect
@@ -51,7 +52,7 @@ from app.resources import match_resources
 # ───────── config & constants ─────────
 HISTORY_WINDOW          = 6
 MODEL_NAME              = "gpt-4o"
-RECOMMEND_AFTER_N_HITS  = 3          # curiosity threshold
+RECOMMEND_AFTER_N_HITS  = 2          # curiosity threshold
 
 _GENERIC_TOKENS = {
     "resource","resources","material","materials","book","books",
@@ -232,7 +233,46 @@ async def mentor_confirm(body: ConfirmReq):
         clear_pending_calendar_event(body.uid)
         return {"message": "No problem—let me know if you change your mind."}
 
-    
+def _ensure_calendar_prompt(payload: dict, slot_iso: str | None) -> dict:
+    """
+    If we *have* a FREE_SLOT and the model already recommended something
+    (`payload["recommendation"]` ≠ ""), make sure its **answer** ends with
+    a friendly calendar offer.
+    """
+    if not slot_iso or not payload.get("recommendation"):
+        return payload
+
+    friendly = _humanize_slot(slot_iso)
+    if "calendar" in payload["answer"].lower():
+        return payload                              # already present
+
+    payload["answer"] += (
+        f"\nI noticed you’re free {friendly}. "
+        "Would you like me to add it to your calendar?"
+    )
+    return payload
+ 
+ 
+def _humanize_slot(iso: str, duration_min: int = 30) -> str:
+    """2025-07-25T09:30:00-05:00 → “tomorrow at 9 :30 AM–10 AM”."""
+    dt    = datetime.fromisoformat(iso)          # localised ↗
+    local = dt.astimezone()                      # ensure tz-aware
+    today = datetime.now(local.tzinfo).date()
+    delta = (local.date() - today).days
+
+    # ——— day phrase ———
+    if   delta == 0:              day = "today"
+    elif delta == 1:              day = "tomorrow"
+    elif 2 <= delta <= 6:         day = local.strftime("%A")          # Monday…
+    elif 7 <= delta <= 13:        day = "next " + local.strftime("%A")
+    else:                         day = local.strftime("%b %d")       # Aug 12
+
+    # ——— time range ———
+    start = local.strftime("%-I:%M %p").lower()                       # 9:30 am
+    stop  = (local + timedelta(minutes=duration_min))\
+              .strftime("%-I:%M %p").lower()                         # 10:00 am
+    return f"{day} at {start}–{stop}"
+
 class MentorReq(BaseModel):
     uid: str
     question: str
@@ -284,8 +324,9 @@ async def mentor(body: MentorReq):
         + f"\n\nTOPIC_HITS: {RECOMMEND_AFTER_N_HITS if force_reco else hits}"
         + f"\n\nAVAILABLE_RESOURCES:\n{res_lines}"
     )
-    if free_slot_iso:
-        sys_prompt += f"\n\nFREE_SLOT: {free_slot_iso}"
+    if free_slot_iso:                       # <-- keep the raw value for later logic
+        pretty_slot  = _humanize_slot(free_slot_iso)
+        sys_prompt  += f"\n\nFREE_SLOT: {pretty_slot}"
 
     # 7️⃣ messages
     messages = (
@@ -299,16 +340,27 @@ async def mentor(body: MentorReq):
         answer = ""
         try:
             stream = await client.chat.completions.create(
-                        model=MODEL_NAME, messages=messages,
-                        stream=True, temperature=0.7)
+                model=MODEL_NAME,
+                messages=messages,
+                stream=True,
+                temperature=0.7,
+                response_format={"type": "json_object"},
+            )
             async for chunk in stream:
                 token = chunk.choices[0].delta.content or ""
                 answer += token
                 yield f"data: {token}\n\n"
-            yield "event: done\ndata:[DONE]\n\n"
-            write_turns(uid, q, answer)
+
+            # ── patch the finished answer ────────────────────────────────
+            payload = json.loads(answer)
+            payload  = _ensure_calendar_prompt(payload, free_slot_iso)
+
+            write_turns(uid, q, json.dumps(payload, ensure_ascii=False))
+            yield f"event: done\ndata:{json.dumps(payload)}\n\n"
+
         except Exception as e:
             yield f"event: error\ndata:{e}\n\n"
+
 
     return StreamingResponse(event_stream(),
                              media_type="text/event-stream")
