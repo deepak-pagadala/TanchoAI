@@ -112,7 +112,7 @@ async def _conversation_reply(uid:str, mode:str, user_msg:str)->Dict:
         + [{"role":"user","content":user_msg}]
     )
     resp = await client.chat.completions.create(model=MODEL_NAME,
-            messages=messages, temperature=0.7)
+            messages=messages,response_format={"type": "json_object"}, temperature=0.7)
     assistant = resp.choices[0].message.content.strip()
     write_turns(uid,user_msg,assistant)
     return json.loads(assistant)
