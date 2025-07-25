@@ -124,9 +124,7 @@ RECOMMENDATION RULES
 Recommend **ONE** resource only if:  
 • the learner explicitly asks for materials, **or**  
 • `TOPIC_HITS ≥ 3`.  
-When you do, output it EXACTLY in this form (full-width bracket first):
 
-「おすすめ: <title>」
 
 You may quote study-time or difficulty from AVAILABLE_RESOURCES /
 RESOURCE_CONTEXT inside your prose answer, but the `recommendation` field
