@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from datetime import datetime, timedelta, timezone
 import calendar, json, zoneinfo
 
+
 # ───────── external helper libs ──────────
 from langdetect import detect              # pip install langdetect
 import yake                                 # pip install yake
@@ -31,6 +32,17 @@ from rapidfuzz import fuzz                 # pip install rapidfuzz
 load_dotenv()
 client = AsyncOpenAI()
 app    = FastAPI()
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or use ["http://localhost:5173"] for safety
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ── ensure ./app/static exists ──────────────────────────────────
 static_root = pathlib.Path(__file__).resolve().parent / "static"
@@ -99,9 +111,8 @@ def _context_snippet(topic: str, k=3) -> str:
         for r in hits
     )
 
-async def _conversation_reply(uid:str, mode:str, user_msg:str)->Dict:
+async def _conversation_reply(uid: str, mode: str, user_msg: str, user_name: str = "フレンド") -> Dict:
     history       = get_history(uid)
-    user_name     = body.name or "フレンド"
     template      = PROMPTS[mode]
     system_prompt = template.format(USER_NAME=user_name)
 
