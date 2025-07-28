@@ -28,3 +28,4 @@ starlette==0.37.2                  # FastAPI runtime dependency
 
 # (Optional but handy)
 ujson==5.10.0                      # Fast JSON serializer, ok to drop if unused
+langdetect==1.0.9
