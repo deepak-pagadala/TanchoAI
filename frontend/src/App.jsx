@@ -7,7 +7,7 @@ const TEST_UID = 'demo';
 
 
 /* ─── Google-Sheets webhook ─── */
-const LOG_URL = "https://script.google.com/macros/s/AKfycbxv5ecCShEAXOzGgoACHSExNeahmz56OzG30DYNrWKEObDOSJ1QfNsTkGjykIlTDy-b/exec";
+const LOG_URL = "https://script.google.com/macros/s/AKfycbxBZ1hcCm2q5G7AdsrwErQe93ugrQoi4KMRx53jOe4jeAPHljAj11BVojzZEQHeYkc/exec";
 
 /** Fire-and-forget row writer */
 async function logTurn(mode, subMode, uid, payload) {
