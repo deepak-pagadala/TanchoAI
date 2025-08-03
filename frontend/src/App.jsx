@@ -3,89 +3,86 @@ import axios from 'axios';
 import { ReactMic } from 'react-mic';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
-const TEST_UID = 'demo';
+const TEST_UID = 'demo';                          
+
 
 /* ─── Google-Sheets webhook ─── */
 const LOG_URL = "https://script.google.com/macros/s/AKfycbxv5ecCShEAXOzGgoACHSExNeahmz56OzG30DYNrWKEObDOSJ1QfNsTkGjykIlTDy-b/exec";
 
-async function logTurn(mode /* conversation | mentor | voice */,
-                       sub   /* convCasual / convFormal or '' */,
-                       uid,
-                       payload /* the AI JSON for that mode */) {
-  await fetch(LOG_URL, {
-    method : "POST",
-    headers: { "Content-Type": "application/json" },
-    body   : JSON.stringify({ sheet: mode, uid, sub, payload })
-  }).catch(() => {/* silently ignore log errors */});
+/** Fire-and-forget row writer */
+async function logTurn(mode, subMode, uid, payload) {
+  fetch(LOG_URL, {
+    method : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body   : JSON.stringify({
+      sheet : mode,               // conversation | mentor | voice
+      uid,
+      sub   : subMode || '',      // casual / formal or ''
+      payload
+    })
+  }).catch(() => {});             // never block UI on log errors
 }
 
+/* ─────────────────────────────────────────────────────────── */
 
 function formatCorrection(wrong, fix, explanation) {
-  const stripTags = (txt) => txt?.replace(/<[^>]+>/g, '') ?? '';
-  const explain = stripTags(explanation);
-  if (!wrong && !fix && (explain.trim().toLowerCase() === "en: no errors found." || !explain))
+  const strip = txt => txt?.replace(/<[^>]+>/g, '') ?? '';
+  const explain = strip(explanation);
+  if (!wrong && !fix && (!explain || explain.toLowerCase() === 'en: no errors found.'))
     return null;
-  if (!wrong && !fix && !explain) return null;
+
   return (
     <div className="bg-gray-100 border-l-4 border-yellow-400 p-3 mt-2 mb-1 text-sm">
       <div className="mb-1 font-semibold">📝 Correction</div>
       {wrong && (
         <div>
           <span className="font-medium text-red-700">Wrong:</span>{' '}
-          <span className="text-gray-700">{stripTags(wrong)}</span>
+          <span className="text-gray-700">{strip(wrong)}</span>
         </div>
       )}
       {fix && (
         <div>
           <span className="font-medium text-green-700">Fix:</span>{' '}
-          <span className="text-gray-800">{stripTags(fix)}</span>
+          <span className="text-gray-800">{strip(fix)}</span>
         </div>
       )}
-      {explain && (
-        <div className="mt-1 italic text-gray-700">{explain}</div>
-      )}
+      {explain && <div className="mt-1 italic text-gray-700">{explain}</div>}
     </div>
   );
 }
 
+/* ─────────────────────────────────────────────────────────── */
+
 export default function App() {
   const [mode, setMode]         = useState('conversation');
-  const [convType, setConvType] = useState('convCasual');
+  const [convType, setConvType] = useState('convCasual'); // convCasual / convFormal
   const [input, setInput]       = useState('');
   const [file, setFile]         = useState(null);
   const [loading, setLoading]   = useState(false);
   const [messages, setMessages] = useState([]);
-  // Voice recording state
-  const [isRecording, setIsRecording]     = useState(false);
-  const [recordedWav, setRecordedWav]     = useState(null);
+
+  // voice recording
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedWav, setRecordedWav] = useState(null);
+
   const bottomRef = useRef(null);
 
-  const getLastAssistantIdx = (msgs) => {
-    for (let i = msgs.length - 1; i >= 0; --i)
-      if (msgs[i].role === 'assistant') return i;
-    return -1;
-  };
-
-  const scrollDown = () =>
-    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 10);
-
+  /* helpers */
   const pushMsg = (role, text) => {
     setMessages(prev => [...prev, { role, text }]);
-    scrollDown();
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 10);
   };
-
-  const updateLastAssistantMsg = (updater) => {
+  const updateLastAssistantMsg = updater =>
     setMessages(prev => {
+      const idx = [...prev].reverse().findIndex(m => m.role === 'assistant');
+      if (idx === -1) return prev;
+      const realIdx = prev.length - 1 - idx;
       const copy = [...prev];
-      const idx = getLastAssistantIdx(copy);
-      if (idx !== -1) {
-        const cur = copy[idx].text || '';
-        copy[idx].text = typeof updater === 'function' ? updater(cur) : updater;
-      }
+      const cur  = copy[realIdx].text || '';
+      copy[realIdx].text =
+        typeof updater === 'function' ? updater(cur) : updater;
       return copy;
     });
-    scrollDown();
-  };
 
   const handleModeChange = val => {
     setMode(val);
@@ -94,27 +91,28 @@ export default function App() {
         ? `Conversation (${convType})`
         : val.charAt(0).toUpperCase() + val.slice(1);
     pushMsg('system', `―― Switched to ${label} Mode ――`);
-    setFile(null);
-    setRecordedWav(null);
-    setIsRecording(false);
+    setFile(null); setRecordedWav(null); setIsRecording(false);
   };
 
+  /* ───────── Submit ───────── */
   async function handleSubmit() {
     if (mode !== 'voice' && !input) return;
-    if (mode === 'voice' && !file && !recordedWav) return alert("Please record or select a file!");
+    if (mode === 'voice' && !file && !recordedWav)
+      return alert('Please record or select a file!');
 
     if (mode !== 'voice') pushMsg('user', input);
     setLoading(true);
 
     try {
-      // Conversation Mode
+      /* ─── Conversation ─── */
       if (mode === 'conversation') {
         const { data } = await axios.post(`${API_BASE}/chat`, {
           uid: TEST_UID,
           mode: convType,
-          userMessage: input,
+          userMessage: input
         });
         const { reply, wrong, fix, explanation } = data;
+
         pushMsg(
           'assistant',
           <>
@@ -122,40 +120,41 @@ export default function App() {
             {formatCorrection(wrong, fix, explanation)}
           </>
         );
+
+        await logTurn(
+          'conversation',
+          convType,          // casual / formal
+          TEST_UID,
+          { wrong, fix, reply, explanation }
+        );
       }
 
-      // Mentor Mode (SSE streaming)
+      /* ─── Mentor (stream) ─── */
       else if (mode === 'mentor') {
-        pushMsg('assistant', ''); // placeholder for streaming
-        doMentorStream(input);
+        pushMsg('assistant', ''); // placeholder
+        await doMentorStream(input);
         setLoading(false);
         setInput('');
         return;
       }
 
-      // Voice Mode
-      else if (mode === 'voice') {
-        let audioToSend = recordedWav || file;
-        if (!audioToSend) return alert("Record or select a file first!");
+      /* ─── Voice ─── */
+      else {
+        const audioBlob = recordedWav || file;
         const form = new FormData();
         form.append('uid', TEST_UID);
         form.append('voiceMode', 'conversation');
         form.append('convSubMode', convType);
-        form.append('audio', audioToSend, audioToSend instanceof File ? audioToSend.name : 'audio.wav');
+        form.append('audio', audioBlob,
+          audioBlob instanceof File ? audioBlob.name : 'audio.wav');
 
         const { data } = await axios.post(`${API_BASE}/voice_chat`, form);
         const { jp, en, correction, transcript, ttsUrl } = data;
 
-        // 1. User bubble for transcript (prioritize transcript > en > jp)
-        if (transcript) {
-          pushMsg('user', transcript);
-        } else if (en) {
-          pushMsg('user', en);
-        } else if (jp) {
-          pushMsg('user', jp);
-        }
+        /* user bubble */
+        pushMsg('user', transcript || en || jp);
 
-        // 2. Assistant bubble: reply text, corrections, and audio player if ttsUrl
+        /* assistant bubble */
         pushMsg(
           'assistant',
           <>
@@ -169,19 +168,9 @@ export default function App() {
             )}
           </>
         );
-        await logTurn(
-          "voice", "", TEST_UID,
-          { jp, en, correction }
-        );
-        await logTurn(
-          "conversation",
-          convType,          // "convCasual" | "convFormal"
-          TEST_UID,
-          { wrong, fix, reply, explanation }
-        );
 
-        setFile(null);
-        setRecordedWav(null);
+        await logTurn('voice', '', TEST_UID, { jp, en, correction });
+        setFile(null); setRecordedWav(null);
       }
     } catch (err) {
       console.error(err);
@@ -192,40 +181,36 @@ export default function App() {
     }
   }
 
-  // -- streaming Mentor response helper --
+  /* ───────── Mentor stream helper ───────── */
   async function doMentorStream(question) {
     try {
       const res = await fetch(`${API_BASE}/mentor`, {
-        method : 'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body   : JSON.stringify({ uid: TEST_UID, question }),
+        body: JSON.stringify({ uid: TEST_UID, question })
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
 
       const reader  = res.body.getReader();
-      const decoder = new TextDecoder();
+      const dec     = new TextDecoder();
       let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        buffer += dec.decode(value, { stream: true });
 
         let sep;
         while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep).trim();
-          buffer = buffer.slice(sep + 2);
+          const block = buffer.slice(0, sep).trim(); buffer = buffer.slice(sep + 2);
           if (!block) continue;
 
           if (block.startsWith('event: done')) {
             const m = block.match(/data:(\{.*\})/s);
             if (m) {
-              const { answer } = JSON.parse(m[1]);
+              const { answer, recommendation } = JSON.parse(m[1]);
               updateLastAssistantMsg(answer);
-              await logTurn(
-                "mentor", "", TEST_UID,
-                { answer }
-              );
+              await logTurn('mentor', '', TEST_UID, { answer, recommendation });
             }
           } else if (block.startsWith('data:')) {
             const token = block.replace(/^data:\s*/, '');
@@ -239,7 +224,7 @@ export default function App() {
     }
   }
 
-  // --- UI ---
+  /* ───────── UI ───────── */
   return (
     <div className="flex flex-col h-screen bg-gray-100">
       <header className="p-4 bg-blue-600 text-white text-xl font-semibold">
@@ -268,6 +253,7 @@ export default function App() {
       </main>
 
       <footer className="p-4 border-t bg-white space-y-2">
+        {/* mode pickers */}
         <div className="flex items-center space-x-3">
           <select
             value={mode}
@@ -291,6 +277,7 @@ export default function App() {
           )}
         </div>
 
+        {/* input area */}
         {mode === 'voice' ? (
           <>
             <div className="flex items-center space-x-2 mt-2">
@@ -303,18 +290,20 @@ export default function App() {
                     setIsRecording(false);
                   }
                 }}
-                className={`px-4 py-2 rounded ${isRecording ? 'bg-red-500 text-white' : 'bg-green-600 text-white'}`}
+                className={`px-4 py-2 rounded ${
+                  isRecording ? 'bg-red-500' : 'bg-green-600'
+                } text-white`}
               >
-                {isRecording ? "Stop" : "Record"}
+                {isRecording ? 'Stop' : 'Record'}
               </button>
               <ReactMic
                 record={isRecording}
                 className="w-32 h-8"
-                onStop={(rec) => setRecordedWav(rec.blob)}
-                strokeColor="#000000"
+                onStop={rec => setRecordedWav(rec.blob)}
+                strokeColor="#000"
                 backgroundColor="#e0e7ef"
                 mimeType="audio/wav"
-                echoCancellation={true}
+                echoCancellation
                 channelCount={1}
                 sampleRate={16000}
               />
@@ -331,11 +320,7 @@ export default function App() {
                 }}
                 className="w-auto"
               />
-              {file && (
-                <span className="text-xs text-gray-600 ml-2">
-                  {file.name}
-                </span>
-              )}
+              {file && <span className="text-xs text-gray-600 ml-2">{file.name}</span>}
             </div>
           </>
         ) : (
