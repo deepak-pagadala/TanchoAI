@@ -5,6 +5,21 @@ import { ReactMic } from 'react-mic';
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 const TEST_UID = 'demo';
 
+/* ─── Google-Sheets webhook ─── */
+const LOG_URL = "https://script.google.com/macros/s/AKfycbxv5ecCShEAXOzGgoACHSExNeahmz56OzG30DYNrWKEObDOSJ1QfNsTkGjykIlTDy-b/exec";
+
+async function logTurn(mode /* conversation | mentor | voice */,
+                       sub   /* convCasual / convFormal or '' */,
+                       uid,
+                       payload /* the AI JSON for that mode */) {
+  await fetch(LOG_URL, {
+    method : "POST",
+    headers: { "Content-Type": "application/json" },
+    body   : JSON.stringify({ sheet: mode, uid, sub, payload })
+  }).catch(() => {/* silently ignore log errors */});
+}
+
+
 function formatCorrection(wrong, fix, explanation) {
   const stripTags = (txt) => txt?.replace(/<[^>]+>/g, '') ?? '';
   const explain = stripTags(explanation);
@@ -154,6 +169,17 @@ export default function App() {
             )}
           </>
         );
+        await logTurn(
+          "voice", "", TEST_UID,
+          { jp, en, correction }
+        );
+        await logTurn(
+          "conversation",
+          convType,          // "convCasual" | "convFormal"
+          TEST_UID,
+          { wrong, fix, reply, explanation }
+        );
+
         setFile(null);
         setRecordedWav(null);
       }
@@ -196,6 +222,10 @@ export default function App() {
             if (m) {
               const { answer } = JSON.parse(m[1]);
               updateLastAssistantMsg(answer);
+              await logTurn(
+                "mentor", "", TEST_UID,
+                { answer }
+              );
             }
           } else if (block.startsWith('data:')) {
             const token = block.replace(/^data:\s*/, '');
