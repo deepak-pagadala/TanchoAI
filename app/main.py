@@ -1,10 +1,4 @@
-# app/main.py
-# ───────────────────────────────────────────────────────────────
-# Tancho AI  –  Conversation & Mentor endpoints
-# • Smart recommendation logic
-# • Calendar-aware FREE_SLOT injection
-# • Mentor sees full metadata via RESOURCE_CONTEXT
-# ───────────────────────────────────────────────────────────────
+# Complete updated main.py with working title generation
 
 from __future__ import annotations
 import pathlib
@@ -22,7 +16,6 @@ from fastapi.staticfiles import StaticFiles
 from datetime import datetime, timedelta, timezone
 import calendar, json, zoneinfo
 
-
 # ───────── external helper libs ──────────
 from langdetect import detect              # pip install langdetect
 import yake                                 # pip install yake
@@ -37,12 +30,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or use ["http://localhost:5173"] for safety
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # ── ensure ./app/static exists ──────────────────────────────────
 static_root = pathlib.Path(__file__).resolve().parent / "static"
@@ -50,7 +42,6 @@ static_root.mkdir(parents=True, exist_ok=True)
 
 # serve http://…/static/*
 app.mount("/static", StaticFiles(directory=static_root), name="static")
-
 
 # ───────── project-local helpers ─────────
 from app.dummy_store import (
@@ -64,7 +55,7 @@ from app.resources import match_resources
 # ───────── config & constants ─────────
 HISTORY_WINDOW          = 6
 MODEL_NAME              = "gpt-4o"
-RECOMMEND_AFTER_N_HITS  = 2          # curiosity threshold
+RECOMMEND_AFTER_N_HITS  = 2
 
 _GENERIC_TOKENS = {
     "resource","resources","material","materials","book","books",
@@ -72,7 +63,7 @@ _GENERIC_TOKENS = {
     "course","courses","app","website","reference","recommend"
 }
 _RESOURCE_TRIGGERS = _GENERIC_TOKENS.copy()
-_last_topic: dict[str, str] = {}     # per-user last concrete topic
+_last_topic: dict[str, str] = {}
 
 # ───────── YAKE keyword extractor ─────────
 _YAKE: dict[str, yake.KeywordExtractor] = {}
@@ -111,9 +102,55 @@ def _context_snippet(topic: str, k=3) -> str:
         for r in hits
     )
 
+async def _generate_chat_title(user_message: str) -> str:
+    """Generate a concise 3-5 word English title for the chat session"""
+    try:
+        print(f"🔍 Generating title for message: '{user_message}'")
+        
+        title_prompt = f"""Create a short title (maximum 4 words) in English that describes what this conversation is about:
+
+User message: "{user_message}"
+
+Requirements:
+- Maximum 4 words
+- English only
+- Descriptive but concise
+- No quotes or punctuation
+- Examples: "Weather Talk", "Food Discussion", "Grammar Help", "Travel Plans"
+
+Title:"""
+
+        resp = await client.chat.completions.create(
+            model=MODEL_NAME,  # Use cheaper model for titles
+            messages=[{"role": "user", "content": title_prompt}],
+            temperature=0.3,
+            max_tokens=15
+        )
+        
+        raw_title = resp.choices[0].message.content.strip()
+        print(f"🤖 Raw AI response: '{raw_title}'")
+        
+        # Clean up the title
+        title = raw_title.replace('"', '').replace("'", "").replace(".", "").replace(":", "")
+        
+        # Ensure it's not too long
+        words = title.split()
+        if len(words) > 4:
+            title = " ".join(words[:4])
+        
+        # Capitalize first letter of each word
+        title = " ".join(word.capitalize() for word in title.split())
+        
+        print(f"✅ Final title: '{title}'")
+        return title or "New Chat"
+        
+    except Exception as e:
+        print(f"❌ Title generation failed: {e}")
+        return "New Chat"
+
 async def _conversation_reply(uid: str, mode: str, user_msg: str, user_name: str = "フレンド") -> Dict:
-    history       = get_history(uid)
-    template      = PROMPTS[mode]
+    history = get_history(uid)
+    template = PROMPTS[mode]
     system_prompt = template.format(USER_NAME=user_name)
 
     if ctx := _history_context(history):
@@ -157,12 +194,11 @@ async def _mentor_reply(uid:str, user_msg:str, free_slot_iso:str|None=None)->Dic
         + [{"role":"user","content":user_msg}]
     )
     resp = await client.chat.completions.create(model=MODEL_NAME,
-            messages=messages, temperature=0.7)
+            messages=messages, response_format={"type": "json_object"}, temperature=0.7)
     assistant = resp.choices[0].message.content.strip()
     write_turns(uid,user_msg,assistant)
     return json.loads(assistant)
 
-# ───────── Voice helper (dict) ─────────
 async def _voice_reply(uid:str, user_msg:str)->Dict:
     messages = (
         [{"role":"system","content":PROMPTS["voice"]}]
@@ -170,15 +206,13 @@ async def _voice_reply(uid:str, user_msg:str)->Dict:
         + [{"role":"user","content":user_msg}]
     )
     resp = await client.chat.completions.create(model=MODEL_NAME,
-            messages=messages, temperature=0.7)
+            messages=messages, response_format={"type": "json_object"}, temperature=0.7)
     assistant = resp.choices[0].message.content.strip()
     write_turns(uid,user_msg,assistant)
     return json.loads(assistant)
 
-
-
 # ===============================================================
-# 1. Conversation endpoint  (unchanged)
+# 1. Conversation endpoint
 # ===============================================================
 class ChatRequest(BaseModel):
     uid: str
@@ -188,11 +222,24 @@ class ChatRequest(BaseModel):
 
 @app.post("/chat")
 async def chat(body: ChatRequest):
-    uid, mode, user_msg, user_name = body.uid, body.mode, body.userMessage,  body.name or "there"
-    history       = get_history(uid)
-    template      = PROMPTS[body.mode]
+    uid, mode, user_msg, user_name = body.uid, body.mode, body.userMessage, body.name or "there"
+    
+    print(f"📨 Chat request - UID: {uid}, Mode: {mode}, Message: '{user_msg}'")
+    
+    # Check if this is a new session (no history)
+    history = get_history(uid)
+    is_new_session = len(history) == 0
+    
+    print(f"🆕 New session: {is_new_session}, History length: {len(history)}")
+    
+    # Generate title for new sessions
+    chat_title = None
+    if is_new_session:
+        chat_title = await _generate_chat_title(user_msg)
+        print(f"🏷️ Generated title: '{chat_title}'")
+    
+    template = PROMPTS[body.mode]
     system_prompt = template.format(USER_NAME=user_name)
-
 
     if ctx := _history_context(history):
         system_prompt += "\n\nLast turns:\n" + ctx
@@ -206,20 +253,28 @@ async def chat(body: ChatRequest):
     )
 
     try:
-        resp  = await client.chat.completions.create(
-                    model=MODEL_NAME, messages=messages, temperature=0.7)
+        resp = await client.chat.completions.create(
+            model=MODEL_NAME, messages=messages, response_format={"type": "json_object"}, temperature=0.7)
         assistant = resp.choices[0].message.content.strip()
-        payload   = json.loads(assistant)
+        payload = json.loads(assistant)
         write_turns(uid, user_msg, assistant)
+        
+        # Include title in response for new sessions
+        if chat_title:
+            payload["chatTitle"] = chat_title
+            print(f"✅ Added title to conversation response: '{chat_title}'")
+        else:
+            payload["chatTitle"] = None
+            print("ℹ️ No title generated (not a new session)")
+            
         return JSONResponse(payload)
     except Exception as e:
         print("CHAT ERROR:", e, file=sys.stderr)
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
 # ===============================================================
-# 2. Mentor endpoint  (resource- & calendar-aware)
+# 2. Mentor endpoint
 # ===============================================================
-
 from app.dummy_store import (
     save_pending_calendar_event,
     get_pending_calendar_event,
@@ -229,6 +284,7 @@ from app.dummy_store import (
 class ConfirmReq(BaseModel):
     uid: str
     confirmation: str
+
 @app.post("/mentor/confirm")
 async def mentor_confirm(body: ConfirmReq):
     pending = get_pending_calendar_event(body.uid)
@@ -237,81 +293,79 @@ async def mentor_confirm(body: ConfirmReq):
 
     ans = body.confirmation.strip().lower()
     if ans.startswith(("y", "yes", "sure", "okay")):
-        # We won’t create the event server-side—iOS will handle that.
         clear_pending_calendar_event(body.uid)
-        return {"message": "Great! I’ve queued it on your device’s calendar."}
+        return {"message": "Great! I've queued it on your device's calendar."}
     else:
         clear_pending_calendar_event(body.uid)
         return {"message": "No problem—let me know if you change your mind."}
 
 def _ensure_calendar_prompt(payload: dict, slot_iso: str | None) -> dict:
-    """
-    If we *have* a FREE_SLOT and the model already recommended something
-    (`payload["recommendation"]` ≠ ""), make sure its **answer** ends with
-    a friendly calendar offer.
-    """
     if not slot_iso or not payload.get("recommendation"):
         return payload
 
     friendly = _humanize_slot(slot_iso)
     if "calendar" in payload["answer"].lower():
-        return payload                              # already present
+        return payload
 
     payload["answer"] += (
-        f"\nI noticed you’re free {friendly}. "
+        f"\nI noticed you're free {friendly}. "
         "Would you like me to add it to your calendar?"
     )
     return payload
- 
- 
+
 def _humanize_slot(iso: str, duration_min: int = 30) -> str:
-    """2025-07-25T09:30:00-05:00 → “tomorrow at 9 :30 AM–10 AM”."""
-    dt    = datetime.fromisoformat(iso)          # localised ↗
-    local = dt.astimezone()                      # ensure tz-aware
+    dt = datetime.fromisoformat(iso)
+    local = dt.astimezone()
     today = datetime.now(local.tzinfo).date()
     delta = (local.date() - today).days
 
-    # ——— day phrase ———
     if   delta == 0:              day = "today"
     elif delta == 1:              day = "tomorrow"
-    elif 2 <= delta <= 6:         day = local.strftime("%A")          # Monday…
+    elif 2 <= delta <= 6:         day = local.strftime("%A")
     elif 7 <= delta <= 13:        day = "next " + local.strftime("%A")
-    else:                         day = local.strftime("%b %d")       # Aug 12
+    else:                         day = local.strftime("%b %d")
 
-    # ——— time range ———
-    start = local.strftime("%-I:%M %p").lower()                       # 9:30 am
-    stop  = (local + timedelta(minutes=duration_min))\
-              .strftime("%-I:%M %p").lower()                         # 10:00 am
+    start = local.strftime("%-I:%M %p").lower()
+    stop  = (local + timedelta(minutes=duration_min)).strftime("%-I:%M %p").lower()
     return f"{day} at {start}–{stop}"
 
 class MentorReq(BaseModel):
     uid: str
     question: str
-    freeSlot: Optional[str] = None     # ISO-8601 start of free hour
+    freeSlot: Optional[str] = None
     name: Optional[str] = None
 
 @app.post("/mentor", response_class=StreamingResponse)
 async def mentor(body: MentorReq):
     uid, q, free_slot_iso, user_name = body.uid, body.question, body.freeSlot, body.name or "there"
+    
+    print(f"📨 Mentor request - UID: {uid}, Question: '{q}'")
+    
+    # Check if this is a new session
+    history = get_history(uid)
+    is_new_session = len(history) == 0
+    
+    print(f"🆕 New session: {is_new_session}, History length: {len(history)}")
+    
+    # Generate title for new sessions
+    chat_title = None
+    if is_new_session:
+        chat_title = await _generate_chat_title(q)
+        print(f"🏷️ Generated title: '{chat_title}'")
 
-    # 1️⃣ explicit request?
+    # Topic extraction and resource logic
     explicit = _wants_resources(q)
-
-    # 2️⃣ topic extraction
     cand_topic = _extract_topic(q)
     is_generic = cand_topic in _GENERIC_TOKENS
     topic = (_last_topic.get(uid) or last_resource(uid) or cand_topic) if is_generic else cand_topic
     if not is_generic: _last_topic[uid] = topic
 
-    # 3️⃣ hit counter
     if topic and not is_generic:
         inc_topic(uid, topic)
     hits = topic_hits(uid, topic) if topic else 0
 
-    # 4️⃣ decide on recommendation
     force_reco = explicit or (hits >= RECOMMEND_AFTER_N_HITS)
 
-    # 5️⃣ resource list
     if force_reco and topic:
         res_list = match_resources(topic)
         res_lines = "\n".join(
@@ -323,11 +377,10 @@ async def mentor(body: MentorReq):
         res_list  = []
         res_lines = "NONE"
 
-    # 6️⃣ build system prompt
-    template    = PROMPTS["mentor"]
+    # Build system prompt
+    template = PROMPTS["mentor"]
     base_prompt = template.format(USER_NAME=user_name)
 
-# 3) Build out the rest of your system prompt
     sys_prompt = (
         base_prompt
         + "\n\n### RESOURCE_CONTEXT\n"
@@ -335,18 +388,17 @@ async def mentor(body: MentorReq):
         + f"\n\nTOPIC_HITS: {RECOMMEND_AFTER_N_HITS if force_reco else hits}"
         + f"\n\nAVAILABLE_RESOURCES:\n{res_lines}"
     )
-    if free_slot_iso:                       # <-- keep the raw value for later logic
-        pretty_slot  = _humanize_slot(free_slot_iso)
-        sys_prompt  += f"\n\nFREE_SLOT: {pretty_slot}"
+    if free_slot_iso:
+        pretty_slot = _humanize_slot(free_slot_iso)
+        sys_prompt += f"\n\nFREE_SLOT: {pretty_slot}"
 
-    # 7️⃣ messages
     messages = (
         [{"role":"system","content":sys_prompt}]
         + get_history(uid)
         + [{"role":"user","content":q}]
     )
 
-    # 8️⃣ stream
+    # Stream response
     async def event_stream():
         answer = ""
         try:
@@ -362,78 +414,109 @@ async def mentor(body: MentorReq):
                 answer += token
                 yield f"data: {token}\n\n"
 
-            # ── patch the finished answer ────────────────────────────────
             payload = json.loads(answer)
-            payload  = _ensure_calendar_prompt(payload, free_slot_iso)
+            payload = _ensure_calendar_prompt(payload, free_slot_iso)
+            
+            # Include title for new sessions
+            if chat_title:
+                payload["chatTitle"] = chat_title
+                print(f"✅ Added title to mentor response: '{chat_title}'")
+            else:
+                payload["chatTitle"] = None
+                print("ℹ️ No title generated (not a new session)")
 
             write_turns(uid, q, json.dumps(payload, ensure_ascii=False))
-            yield f"event: done\ndata:{json.dumps(payload)}\n\n"
+            yield f"event: done\ndata: {json.dumps(payload)}\n\n"
 
         except Exception as e:
-            yield f"event: error\ndata:{e}\n\n"
+            print(f"❌ Mentor error: {e}")
+            yield f"event: error\ndata: {e}\n\n"
 
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    return StreamingResponse(event_stream(),
-                             media_type="text/event-stream")
 # ===============================================================
-# 3. Voice  • /voice_chat
+# 3. Voice chat endpoint
 # ===============================================================
 class VoiceResp(BaseModel):
-    transcript:  str
-    jp:          str
-    en:          str
-    correction:  str | None = None
-    ttsUrl:     str | None = None 
+    transcript: str
+    jp: str
+    en: str
+    correction: str | None = None
+    ttsUrl: str | None = None 
+    chatTitle: str | None = None  # This field was missing!
     # legacy keys for current iOS code
-    answer:          str | None = None
-    recommendation:  str | None = None
+    answer: str | None = None
+    recommendation: str | None = None
 
 @app.post("/voice_chat", response_model=VoiceResp)
 async def voice_chat(
-    uid: str               = Form(...),
-    voiceMode: str         = Form(...),   # "conversation","mentor","voice"
-    convSubMode: str|None  = Form(None),  # convCasual / convFormal
-    freeSlot: Optional[str]= Form(None),  # ISO slot from iOS
-    audio: UploadFile      = File(...)
+    uid: str = Form(...),
+    voiceMode: str = Form(...),
+    convSubMode: str|None = Form(None),
+    freeSlot: Optional[str] = Form(None),
+    audio: UploadFile = File(...)
 ):
-    # 1️⃣  Whisper transcription
+    print(f"📨 Voice request - UID: {uid}, Mode: {voiceMode}")
+    
+    # Whisper transcription
     audio_bytes = await audio.read()
     txt = await client.audio.transcriptions.create(
         model="whisper-1",
-        file=("speech.wav", audio_bytes, "audio/wav"),   # clearer mime
+        file=("speech.wav", audio_bytes, "audio/wav"),
         response_format="text")
     transcript = txt.strip()
+    
+    print(f"🎤 Transcript: '{transcript}'")
+    
+    # Check if this is a new session
+    history = get_history(uid)
+    is_new_session = len(history) == 0
+    
+    print(f"🆕 New session: {is_new_session}, History length: {len(history)}")
+    
+    # Generate title for new sessions
+    chat_title = None
+    if is_new_session:
+        chat_title = await _generate_chat_title(transcript)
+        print(f"🏷️ Generated title: '{chat_title}'")
 
-    # 2️⃣  Route
+    # Route based on voice mode
     if voiceMode == "conversation":
         sub = convSubMode if convSubMode in ("convCasual","convFormal") else "convCasual"
         r = await _conversation_reply(uid, sub, transcript)
-        return VoiceResp(transcript=transcript,
-                         jp=r["reply"], en="",
-                         correction="",
-                         answer=r["reply"])
+        return VoiceResp(
+            transcript=transcript,
+            jp=r["reply"], 
+            en="",
+            correction="",
+            answer=r["reply"],
+            chatTitle=chat_title
+        )
 
     if voiceMode == "mentor":
         r = await _mentor_reply(uid, transcript, free_slot_iso=freeSlot)
-        return VoiceResp(transcript=transcript,
-                         jp=r["answer"], en="",
-                         correction="",
-                         answer=r["answer"],
-                         recommendation=r.get("recommendation",""))
+        return VoiceResp(
+            transcript=transcript,
+            jp=r["answer"], 
+            en="",
+            correction="",
+            answer=r["answer"],
+            recommendation=r.get("recommendation",""),
+            chatTitle=chat_title
+        )
 
-    # default → dedicated voice prompt
+    # Default voice mode
     r = await _voice_reply(uid, transcript)
 
-    # 3️⃣  Neural TTS with OpenAI /audio/speech (≈1 sec)
+    # Neural TTS generation
     speech = await client.audio.speech.create(
         model="tts-1",
-        voice="alloy",                    # try "nova" or "shimmer" too
+        voice="alloy",
         input=r["jp"]
     )
     mp3_bytes = b"".join([c async for c in (await speech.aiter_bytes())])
 
-
-    # 4️⃣  persist & serve (simple: local /static; prod: S3 or CDN)
+    # Save TTS file
     static_dir = pathlib.Path(__file__).parents[0] / "static/tts"
     static_dir.mkdir(parents=True, exist_ok=True)
 
@@ -444,11 +527,13 @@ async def voice_chat(
     fpath.write_bytes(mp3_bytes)
     tts_url = f"/static/tts/{fname}"
 
+    print(f"✅ Voice response generated with title: '{chat_title}'")
+
     return VoiceResp(
         transcript=transcript,
         jp=r["jp"],
         en=r["en"],
         correction=r.get("correction", ""),
-        ttsUrl=tts_url
+        ttsUrl=tts_url,
+        chatTitle=chat_title
     )
-

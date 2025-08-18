@@ -1,17 +1,38 @@
 # super-simple, not thread-safe – good enough for local testing
-_history = {}          # {uid: [ {role, content} ... ]}
+_history = {}  # Change structure to: {uid: {mode: [ {role, content} ... ]}}
 
-def get_history(uid, limit=20):
-    return _history.get(uid, [])[-limit:]
+def get_history(uid, mode="default", limit=20):
+    """Get history for specific uid and mode"""
+    user_history = _history.get(uid, {})
+    mode_history = user_history.get(mode, [])[-limit:]
+    print(f"📚 get_history for uid '{uid}', mode '{mode}': {len(mode_history)} messages")
+    if mode_history:
+        print(f"   Last message: {mode_history[-1]['role']}: {mode_history[-1]['content'][:50]}...")
+    else:
+        print(f"   No history found for uid '{uid}', mode '{mode}' - this is a NEW SESSION")
+    return mode_history
 
-def write_turns(uid, user_msg, assistant_msg):
-    _history.setdefault(uid, []).extend([
+def write_turns(uid, user_msg, assistant_msg, mode="default"):
+    """Write conversation turns for specific uid and mode"""
+    if uid not in _history:
+        _history[uid] = {}
+        print(f"🆕 Creating new history structure for uid '{uid}'")
+    
+    if mode not in _history[uid]:
+        _history[uid][mode] = []
+        print(f"🆕 Creating new mode history for uid '{uid}', mode '{mode}'")
+    else:
+        print(f"📝 Adding to existing history for uid '{uid}', mode '{mode}' (was {len(_history[uid][mode])} messages)")
+    
+    _history[uid][mode].extend([
         {"role": "user", "content": user_msg},
         {"role": "assistant", "content": assistant_msg}
     ])
+    
+    print(f"📊 Total messages for uid '{uid}', mode '{mode}': {len(_history[uid][mode])}")
 
-
-_topic_counts: dict[str, dict[str, int]] = {}  # uid -> {topic: count}
+# Keep other functions unchanged...
+_topic_counts: dict[str, dict[str, int]] = {}
 
 def inc_topic(uid: str, topic: str):
     _topic_counts.setdefault(uid, {})
@@ -20,8 +41,6 @@ def inc_topic(uid: str, topic: str):
 def topic_hits(uid: str, topic: str) -> int:
     return _topic_counts.get(uid, {}).get(topic, 0)
 
-
-# add near the existing in-memory dicts
 _user_mem: dict[str, dict] = {}
 
 def remember_resource(uid: str, title: str) -> None:
@@ -29,6 +48,7 @@ def remember_resource(uid: str, title: str) -> None:
 
 def last_resource(uid: str) -> str | None:
     return _user_mem.get(uid, {}).get("last_resource")
+
 
 
 # Simple in-memory store for “pending” calendar events
