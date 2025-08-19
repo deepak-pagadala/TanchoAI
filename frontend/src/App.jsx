@@ -216,6 +216,7 @@ export default function App() {
       const reader  = res.body.getReader();
       const dec     = new TextDecoder();
       let buffer = '';
+      let streamedContent = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -224,23 +225,41 @@ export default function App() {
 
         let sep;
         while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, sep).trim(); buffer = buffer.slice(sep + 2);
+          const block = buffer.slice(0, sep).trim(); 
+          buffer = buffer.slice(sep + 2);
           if (!block) continue;
 
           if (block.startsWith('event: done')) {
-            const m = block.match(/data:(\{.*\})/s);
-            if (m) {
-              const { answer, recommendation, chatTitle } = JSON.parse(m[1]);
-              let finalAnswer = answer;
-              if (chatTitle) {
-                finalAnswer += `\n\n💡 Chat title: ${chatTitle}`;
+            // Parse the final JSON payload
+            const dataMatch = block.match(/data:\s*(\{.*\})/s);
+            if (dataMatch) {
+              try {
+                const finalData = JSON.parse(dataMatch[1]);
+                const { answer, recommendation, chatTitle } = finalData;
+                
+                // Replace the streamed content with the final parsed answer
+                let finalAnswer = answer || streamedContent;
+                if (chatTitle) {
+                  finalAnswer += `\n\n💡 Chat title: ${chatTitle}`;
+                }
+                
+                updateLastAssistantMsg(() => finalAnswer);
+                await logTurn('mentor', `${language}`, TEST_UID, { answer, recommendation, chatTitle, language });
+              } catch (parseErr) {
+                console.error('Failed to parse final JSON:', parseErr);
+                // Keep the streamed content if JSON parsing fails
               }
-              updateLastAssistantMsg(finalAnswer);
-              await logTurn('mentor', `${language}`, TEST_UID, { answer, recommendation, chatTitle, language });
             }
+            break; // Exit the streaming loop
           } else if (block.startsWith('data:')) {
+            // Stream individual tokens but try to avoid JSON fragments
             const token = block.replace(/^data:\s*/, '');
-            updateLastAssistantMsg(txt => txt + token);
+            
+            // Skip obvious JSON fragments (starting with { or containing ")
+            if (!token.startsWith('{') && !token.includes('"answer"') && !token.includes('"recommendation"')) {
+              streamedContent += token;
+              updateLastAssistantMsg(txt => txt + token);
+            }
           }
         }
       }
