@@ -375,9 +375,9 @@ class MentorRequest(BaseModel):
     language: Literal["japanese", "korean"] = "japanese"  # NEW
 
 @app.post("/mentor", response_class=StreamingResponse)
-async def mentor(body: MentorRequest):  # now matches the class name
+async def mentor(body: MentorRequest):
     uid, q, free_slot_iso, user_name = body.uid, body.question, body.freeSlot, body.name or "Friend"
-    language = body.language  
+    language = body.language
     
     # Auto-detect language
     if not language or language == "japanese":
@@ -395,6 +395,7 @@ async def mentor(body: MentorRequest):  # now matches the class name
     chat_title = None
     if is_new_session:
         chat_title = await _generate_chat_title(q)
+        print(f"🏷️ Generated mentor title: '{chat_title}'")
 
     # Topic extraction with language support
     explicit = _wants_resources(q)
@@ -410,7 +411,7 @@ async def mentor(body: MentorRequest):  # now matches the class name
     force_reco = explicit or (hits >= RECOMMEND_AFTER_N_HITS)
 
     if force_reco and topic:
-        res_list = match_resources(topic)
+        res_list = match_resources(topic)  # Fixed: removed language parameter that doesn't exist
         res_lines = "\n".join(
             f"- {r['title']} ({r['type']}, {r['study_time']} hrs, {r['difficulty']})"
             for r in res_list
@@ -461,20 +462,31 @@ async def mentor(body: MentorRequest):  # now matches the class name
                 answer += token
                 yield f"data: {token}\n\n"
 
+            # Parse the complete JSON response
             payload = json.loads(answer)
             payload = _ensure_calendar_prompt(payload, free_slot_iso)
             
+            # ✅ CRITICAL FIX: Always include chatTitle in the payload
             if chat_title:
                 payload["chatTitle"] = chat_title
+                print(f"✅ Mentor payload includes title: {payload.get('chatTitle')}")
             else:
                 payload["chatTitle"] = None
+                print("ℹ️ No title generated (not a new session)")
 
+            # Write to history with language-specific mode
             write_turns(uid, q, json.dumps(payload, ensure_ascii=False), f"mentor_{language}")
-            yield f"event: done\ndata: {json.dumps(payload)}\n\n"
+            
+            # Send the final payload with title included
+            yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             print(f"❌ Mentor error: {e}")
-            yield f"event: error\ndata: {e}\n\n"
+            # Include title even in error response for new sessions
+            error_payload = {"error": str(e)}
+            if chat_title:
+                error_payload["chatTitle"] = chat_title
+            yield f"event: error\ndata: {json.dumps(error_payload)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

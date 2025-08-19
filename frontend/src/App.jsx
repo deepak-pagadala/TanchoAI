@@ -28,7 +28,7 @@ async function logTurn(mode, subMode, uid, payload) {
 function formatCorrection(wrong, fix, explanation) {
   const strip = txt => txt?.replace(/<[^>]+>/g, '') ?? '';
   const explain = strip(explanation);
-  if (!wrong && !fix && (!explain || explain.toLowerCase() === 'en: no errors found.'))
+  if (!wrong && !fix && (!explain || explain.toLowerCase() === 'en: no errors found.' || explain.includes('오류가 발견되지 않았습니다')))
     return null;
 
   return (
@@ -56,6 +56,7 @@ function formatCorrection(wrong, fix, explanation) {
 export default function App() {
   const [mode, setMode]         = useState('conversation');
   const [convType, setConvType] = useState('convCasual'); // convCasual / convFormal
+  const [language, setLanguage] = useState('japanese');   // NEW: japanese / korean
   const [input, setInput]       = useState('');
   const [file, setFile]         = useState(null);
   const [loading, setLoading]   = useState(false);
@@ -90,8 +91,13 @@ export default function App() {
       val === 'conversation'
         ? `Conversation (${convType})`
         : val.charAt(0).toUpperCase() + val.slice(1);
-    pushMsg('system', `―― Switched to ${label} Mode ――`);
+    pushMsg('system', `―― Switched to ${label} Mode (${language}) ――`);
     setFile(null); setRecordedWav(null); setIsRecording(false);
+  };
+
+  const handleLanguageChange = val => {
+    setLanguage(val);
+    pushMsg('system', `―― Language changed to ${val.charAt(0).toUpperCase() + val.slice(1)} ――`);
   };
 
   /* ───────── Submit ───────── */
@@ -109,23 +115,29 @@ export default function App() {
         const { data } = await axios.post(`${API_BASE}/chat`, {
           uid: TEST_UID,
           mode: convType,
-          userMessage: input
+          userMessage: input,
+          language: language  // NEW: include language
         });
-        const { reply, wrong, fix, explanation } = data;
+        const { reply, wrong, fix, explanation, chatTitle } = data;
 
         pushMsg(
           'assistant',
           <>
             <div>{reply}</div>
             {formatCorrection(wrong, fix, explanation)}
+            {chatTitle && (
+              <div className="text-xs text-gray-500 mt-1 italic">
+                💡 Chat title: {chatTitle}
+              </div>
+            )}
           </>
         );
 
         await logTurn(
           'conversation',
-          convType,          // casual / formal
+          `${convType}_${language}`,          // Include language in subMode
           TEST_UID,
-          { wrong, fix, reply, explanation }
+          { wrong, fix, reply, explanation, chatTitle, language }
         );
       }
 
@@ -145,11 +157,12 @@ export default function App() {
         form.append('uid', TEST_UID);
         form.append('voiceMode', 'conversation');
         form.append('convSubMode', convType);
+        form.append('language', language);  // NEW: include language
         form.append('audio', audioBlob,
           audioBlob instanceof File ? audioBlob.name : 'audio.wav');
 
         const { data } = await axios.post(`${API_BASE}/voice_chat`, form);
-        const { jp, en, correction, transcript, ttsUrl } = data;
+        const { jp, en, correction, transcript, ttsUrl, chatTitle } = data;
 
         /* user bubble */
         pushMsg('user', transcript || en || jp);
@@ -160,6 +173,11 @@ export default function App() {
           <>
             <div>{jp}{en ? `\n${en}` : ''}</div>
             {formatCorrection(null, null, correction)}
+            {chatTitle && (
+              <div className="text-xs text-gray-500 mt-1 italic">
+                💡 Chat title: {chatTitle}
+              </div>
+            )}
             {ttsUrl && (
               <audio controls className="mt-2">
                 <source src={API_BASE + ttsUrl} type="audio/mpeg" />
@@ -169,7 +187,7 @@ export default function App() {
           </>
         );
 
-        await logTurn('voice', '', TEST_UID, { jp, en, correction });
+        await logTurn('voice', `${language}`, TEST_UID, { jp, en, correction, chatTitle, language });
         setFile(null); setRecordedWav(null);
       }
     } catch (err) {
@@ -187,7 +205,11 @@ export default function App() {
       const res = await fetch(`${API_BASE}/mentor`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uid: TEST_UID, question })
+        body: JSON.stringify({ 
+          uid: TEST_UID, 
+          question,
+          language: language  // NEW: include language
+        })
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
 
@@ -208,9 +230,13 @@ export default function App() {
           if (block.startsWith('event: done')) {
             const m = block.match(/data:(\{.*\})/s);
             if (m) {
-              const { answer, recommendation } = JSON.parse(m[1]);
-              updateLastAssistantMsg(answer);
-              await logTurn('mentor', '', TEST_UID, { answer, recommendation });
+              const { answer, recommendation, chatTitle } = JSON.parse(m[1]);
+              let finalAnswer = answer;
+              if (chatTitle) {
+                finalAnswer += `\n\n💡 Chat title: ${chatTitle}`;
+              }
+              updateLastAssistantMsg(finalAnswer);
+              await logTurn('mentor', `${language}`, TEST_UID, { answer, recommendation, chatTitle, language });
             }
           } else if (block.startsWith('data:')) {
             const token = block.replace(/^data:\s*/, '');
@@ -228,7 +254,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-gray-100">
       <header className="p-4 bg-blue-600 text-white text-xl font-semibold">
-        Tancho AI Tester
+        Tancho AI Tester - {language === 'korean' ? '한국어' : '日本語'}
       </header>
 
       <main className="flex-1 overflow-auto p-4 space-y-4">
@@ -253,8 +279,8 @@ export default function App() {
       </main>
 
       <footer className="p-4 border-t bg-white space-y-2">
-        {/* mode pickers */}
-        <div className="flex items-center space-x-3">
+        {/* mode and language pickers */}
+        <div className="flex items-center space-x-3 flex-wrap">
           <select
             value={mode}
             onChange={e => handleModeChange(e.target.value)}
@@ -275,6 +301,16 @@ export default function App() {
               <option value="convFormal">Formal</option>
             </select>
           )}
+
+          {/* NEW: Language selector */}
+          <select
+            value={language}
+            onChange={e => handleLanguageChange(e.target.value)}
+            className="p-2 border rounded bg-green-50"
+          >
+            <option value="japanese">🇯🇵 Japanese</option>
+            <option value="korean">🇰🇷 Korean</option>
+          </select>
         </div>
 
         {/* input area */}
@@ -329,7 +365,11 @@ export default function App() {
             value={input}
             onChange={e => setInput(e.target.value)}
             className="w-full p-2 border rounded mt-2"
-            placeholder="Type a message…"
+            placeholder={
+              language === 'korean' 
+                ? "메시지를 입력하세요..." 
+                : "Type a message…"
+            }
           />
         )}
 
@@ -338,7 +378,7 @@ export default function App() {
           disabled={loading}
           className="w-full bg-blue-600 text-white py-2 rounded mt-2 hover:bg-blue-700 disabled:opacity-50"
         >
-          {loading ? 'Processing…' : 'Send'}
+          {loading ? (language === 'korean' ? '처리 중...' : 'Processing…') : (language === 'korean' ? '전송' : 'Send')}
         </button>
       </footer>
     </div>
