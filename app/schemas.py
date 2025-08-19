@@ -8,9 +8,11 @@ class ChatRequest(BaseModel):
     mode: Literal["convFormal", "convCasual"]
     userMessage: str
     name: Optional[str] = None
-
+    language: Literal["japanese", "korean"] = "japanese"  # NEW
+     
 class MentorRequest(BaseModel):
     uid: str
     question: str
-    freeSlot: Optional[str] = None   # ISO-8601 datetime string for client-computed slot
-    name: Optional[str] = None  
+    freeSlot: Optional[str] = None
+    name: Optional[str] = None
+    language: Literal["japanese", "korean"] = "japanese"  # NEW

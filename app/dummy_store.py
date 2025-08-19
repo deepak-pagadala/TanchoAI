@@ -1,8 +1,9 @@
 # super-simple, not thread-safe – good enough for local testing
 _history = {}  # Change structure to: {uid: {mode: [ {role, content} ... ]}}
 
+# Update to support language-specific histories
 def get_history(uid, mode="default", limit=20):
-    """Get history for specific uid and mode"""
+    """Get history for specific uid and mode (mode can include language)"""
     user_history = _history.get(uid, {})
     mode_history = user_history.get(mode, [])[-limit:]
     print(f"📚 get_history for uid '{uid}', mode '{mode}': {len(mode_history)} messages")
@@ -13,7 +14,7 @@ def get_history(uid, mode="default", limit=20):
     return mode_history
 
 def write_turns(uid, user_msg, assistant_msg, mode="default"):
-    """Write conversation turns for specific uid and mode"""
+    """Write conversation turns for specific uid and mode (mode can include language)"""
     if uid not in _history:
         _history[uid] = {}
         print(f"🆕 Creating new history structure for uid '{uid}'")
@@ -30,7 +31,6 @@ def write_turns(uid, user_msg, assistant_msg, mode="default"):
     ])
     
     print(f"📊 Total messages for uid '{uid}', mode '{mode}': {len(_history[uid][mode])}")
-
 # Keep other functions unchanged...
 _topic_counts: dict[str, dict[str, int]] = {}
 

@@ -148,6 +148,37 @@ Title:"""
         print(f"❌ Title generation failed: {e}")
         return "New Chat"
 
+# Add Korean language detection support
+def _detect_language(text: str) -> str:
+    """Detect if text is Korean or Japanese"""
+    try:
+        detected = detect(text)
+        if detected == 'ko':
+            return 'korean'
+        elif detected == 'ja':
+            return 'japanese'
+        else:
+            # Fallback: check for Korean/Japanese characters
+            has_korean = any('\uac00' <= char <= '\ud7af' for char in text)
+            has_japanese = any('\u3040' <= char <= '\u309f' or '\u30a0' <= char <= '\u30ff' for char in text)
+            
+            if has_korean:
+                return 'korean'
+            elif has_japanese:
+                return 'japanese'
+            else:
+                return 'japanese'  # default
+    except:
+        return 'japanese'  # default
+
+# Update YAKE extractor to support Korean
+def _extract_topic_with_language(text: str, language: str) -> str:
+    lang_code = "ko" if language == "korean" else "ja"
+    if lang_code not in _YAKE:
+        _YAKE[lang_code] = yake.KeywordExtractor(lan=lang_code, n=1, dedupLim=0.9, top=1)
+    kws = _YAKE[lang_code].extract_keywords(text)
+    return (kws[0][0] if kws else text.split()[0]).lower()
+
 async def _conversation_reply(uid: str, mode: str, user_msg: str, user_name: str = "フレンド") -> Dict:
     history = get_history(uid)
     template = PROMPTS[mode]
@@ -216,29 +247,40 @@ async def _voice_reply(uid:str, user_msg:str)->Dict:
 # ===============================================================
 class ChatRequest(BaseModel):
     uid: str
-    mode: Literal["convFormal","convCasual"]
+    mode: Literal["convFormal", "convCasual"]
     userMessage: str
     name: Optional[str] = None
+    language: Literal["japanese", "korean"] = "japanese"  # NEW
+ 
 
 @app.post("/chat")
 async def chat(body: ChatRequest):
-    uid, mode, user_msg, user_name = body.uid, body.mode, body.userMessage, body.name or "there"
+    uid, mode, user_msg, user_name = body.uid, body.mode, body.userMessage, body.name or "Friend"
+    language = body.language  # NEW
     
-    print(f"📨 Chat request - UID: {uid}, Mode: {mode}, Message: '{user_msg}'")
+    # Auto-detect language if not specified
+    if not language or language == "japanese":
+        detected_lang = _detect_language(user_msg)
+        if detected_lang == "korean":
+            language = "korean"
     
-    # Check if this is a new session (no history)
-    history = get_history(uid)
+    print(f"🔨 Chat request - UID: {uid}, Mode: {mode}, Language: {language}, Message: '{user_msg}'")
+    
+    # Check if this is a new session
+    history = get_history(uid, f"{mode}_{language}")  # Separate history per language
     is_new_session = len(history) == 0
-    
-    print(f"🆕 New session: {is_new_session}, History length: {len(history)}")
     
     # Generate title for new sessions
     chat_title = None
     if is_new_session:
         chat_title = await _generate_chat_title(user_msg)
-        print(f"🏷️ Generated title: '{chat_title}'")
     
-    template = PROMPTS[body.mode]
+    # Select appropriate prompt template
+    prompt_key = f"{language}_{mode}" if language == "korean" else mode
+    if prompt_key not in PROMPTS:
+        prompt_key = mode  # fallback to Japanese
+        
+    template = PROMPTS[prompt_key]
     system_prompt = template.format(USER_NAME=user_name)
 
     if ctx := _history_context(history):
@@ -257,21 +299,17 @@ async def chat(body: ChatRequest):
             model=MODEL_NAME, messages=messages, response_format={"type": "json_object"}, temperature=0.7)
         assistant = resp.choices[0].message.content.strip()
         payload = json.loads(assistant)
-        write_turns(uid, user_msg, assistant)
+        write_turns(uid, user_msg, assistant, f"{mode}_{language}")  # Language-specific history
         
-        # Include title in response for new sessions
         if chat_title:
             payload["chatTitle"] = chat_title
-            print(f"✅ Added title to conversation response: '{chat_title}'")
         else:
             payload["chatTitle"] = None
-            print("ℹ️ No title generated (not a new session)")
             
         return JSONResponse(payload)
     except Exception as e:
         print("CHAT ERROR:", e, file=sys.stderr)
         return JSONResponse(status_code=500, content={"detail": str(e)})
-
 # ===============================================================
 # 2. Mentor endpoint
 # ===============================================================
@@ -329,33 +367,38 @@ def _humanize_slot(iso: str, duration_min: int = 30) -> str:
     stop  = (local + timedelta(minutes=duration_min)).strftime("%-I:%M %p").lower()
     return f"{day} at {start}–{stop}"
 
-class MentorReq(BaseModel):
+class MentorRequest(BaseModel):
     uid: str
     question: str
     freeSlot: Optional[str] = None
     name: Optional[str] = None
+    language: Literal["japanese", "korean"] = "japanese"  # NEW
 
 @app.post("/mentor", response_class=StreamingResponse)
-async def mentor(body: MentorReq):
-    uid, q, free_slot_iso, user_name = body.uid, body.question, body.freeSlot, body.name or "there"
+async def mentor(body: MentorRequest):  # now matches the class name
+    uid, q, free_slot_iso, user_name = body.uid, body.question, body.freeSlot, body.name or "Friend"
+    language = body.language  
     
-    print(f"📨 Mentor request - UID: {uid}, Question: '{q}'")
+    # Auto-detect language
+    if not language or language == "japanese":
+        detected_lang = _detect_language(q)
+        if detected_lang == "korean":
+            language = "korean"
     
-    # Check if this is a new session
-    history = get_history(uid)
+    print(f"🔨 Mentor request - UID: {uid}, Language: {language}, Question: '{q}'")
+    
+    # Check if this is a new session  
+    history = get_history(uid, f"mentor_{language}")
     is_new_session = len(history) == 0
-    
-    print(f"🆕 New session: {is_new_session}, History length: {len(history)}")
     
     # Generate title for new sessions
     chat_title = None
     if is_new_session:
         chat_title = await _generate_chat_title(q)
-        print(f"🏷️ Generated title: '{chat_title}'")
 
-    # Topic extraction and resource logic
+    # Topic extraction with language support
     explicit = _wants_resources(q)
-    cand_topic = _extract_topic(q)
+    cand_topic = _extract_topic_with_language(q, language)
     is_generic = cand_topic in _GENERIC_TOKENS
     topic = (_last_topic.get(uid) or last_resource(uid) or cand_topic) if is_generic else cand_topic
     if not is_generic: _last_topic[uid] = topic
@@ -377,8 +420,12 @@ async def mentor(body: MentorReq):
         res_list  = []
         res_lines = "NONE"
 
-    # Build system prompt
-    template = PROMPTS["mentor"]
+    # Build system prompt with language-specific template
+    prompt_key = f"{language}_mentor" if language == "korean" else "mentor"
+    if prompt_key not in PROMPTS:
+        prompt_key = "mentor"  # fallback
+        
+    template = PROMPTS[prompt_key]
     base_prompt = template.format(USER_NAME=user_name)
 
     sys_prompt = (
@@ -394,7 +441,7 @@ async def mentor(body: MentorReq):
 
     messages = (
         [{"role":"system","content":sys_prompt}]
-        + get_history(uid)
+        + get_history(uid, f"mentor_{language}")
         + [{"role":"user","content":q}]
     )
 
@@ -417,15 +464,12 @@ async def mentor(body: MentorReq):
             payload = json.loads(answer)
             payload = _ensure_calendar_prompt(payload, free_slot_iso)
             
-            # Include title for new sessions
             if chat_title:
                 payload["chatTitle"] = chat_title
-                print(f"✅ Added title to mentor response: '{chat_title}'")
             else:
                 payload["chatTitle"] = None
-                print("ℹ️ No title generated (not a new session)")
 
-            write_turns(uid, q, json.dumps(payload, ensure_ascii=False))
+            write_turns(uid, q, json.dumps(payload, ensure_ascii=False), f"mentor_{language}")
             yield f"event: done\ndata: {json.dumps(payload)}\n\n"
 
         except Exception as e:
@@ -453,37 +497,47 @@ async def voice_chat(
     uid: str = Form(...),
     voiceMode: str = Form(...),
     convSubMode: str|None = Form(None),
+    language: str = Form("japanese"),  # NEW
     freeSlot: Optional[str] = Form(None),
     audio: UploadFile = File(...)
 ):
-    print(f"📨 Voice request - UID: {uid}, Mode: {voiceMode}")
+    print(f"🔨 Voice request - UID: {uid}, Mode: {voiceMode}, Language: {language}")
     
-    # Whisper transcription
+    # Whisper transcription with language detection
     audio_bytes = await audio.read()
+    
+    # Use language-specific whisper if available
+    whisper_language = "ko" if language == "korean" else "ja"
+    
     txt = await client.audio.transcriptions.create(
         model="whisper-1",
         file=("speech.wav", audio_bytes, "audio/wav"),
-        response_format="text")
+        response_format="text",
+        language=whisper_language  # NEW: specify language for better accuracy
+    )
     transcript = txt.strip()
     
     print(f"🎤 Transcript: '{transcript}'")
     
-    # Check if this is a new session
-    history = get_history(uid)
-    is_new_session = len(history) == 0
+    # Auto-detect language from transcript if not specified
+    if language == "japanese":
+        detected_lang = _detect_language(transcript)
+        if detected_lang == "korean":
+            language = "korean"
     
-    print(f"🆕 New session: {is_new_session}, History length: {len(history)}")
+    # Check if this is a new session
+    history = get_history(uid, f"voice_{language}")
+    is_new_session = len(history) == 0
     
     # Generate title for new sessions
     chat_title = None
     if is_new_session:
         chat_title = await _generate_chat_title(transcript)
-        print(f"🏷️ Generated title: '{chat_title}'")
 
-    # Route based on voice mode
+    # Route based on voice mode with language support
     if voiceMode == "conversation":
         sub = convSubMode if convSubMode in ("convCasual","convFormal") else "convCasual"
-        r = await _conversation_reply(uid, sub, transcript)
+        r = await _conversation_reply(uid, f"{language}_{sub}" if language == "korean" else sub, transcript)
         return VoiceResp(
             transcript=transcript,
             jp=r["reply"], 
@@ -494,7 +548,7 @@ async def voice_chat(
         )
 
     if voiceMode == "mentor":
-        r = await _mentor_reply(uid, transcript, free_slot_iso=freeSlot)
+        r = await _mentor_reply(uid, transcript, language, free_slot_iso=freeSlot)
         return VoiceResp(
             transcript=transcript,
             jp=r["answer"], 
@@ -505,21 +559,19 @@ async def voice_chat(
             chatTitle=chat_title
         )
 
-    # Default voice mode
-    r = await _voice_reply(uid, transcript)
+    # Default voice mode with language support
+    r = await _voice_reply(uid, transcript, language)
 
-    # Neural TTS generation
+    # Neural TTS generation with Korean support
+    tts_voice = "alloy"  # OpenAI TTS supports multiple languages with same voice
     speech = await client.audio.speech.create(
         model="tts-1",
-        voice="alloy",
-        input=r["jp"]
+        voice=tts_voice,
+        input=r["jp"]  # This field name stays the same for compatibility
     )
     mp3_bytes = b"".join([c async for c in (await speech.aiter_bytes())])
 
     # Save TTS file
-    static_dir = pathlib.Path(__file__).parents[0] / "static/tts"
-    static_dir.mkdir(parents=True, exist_ok=True)
-
     tts_dir = static_root / "tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
     fname = f"{uuid.uuid4()}.mp3"
@@ -531,9 +583,83 @@ async def voice_chat(
 
     return VoiceResp(
         transcript=transcript,
-        jp=r["jp"],
+        jp=r["jp"],  # Contains Korean text when language is Korean
         en=r["en"],
         correction=r.get("correction", ""),
         ttsUrl=tts_url,
         chatTitle=chat_title
     )
+
+async def _conversation_reply(uid: str, mode: str, user_msg: str, user_name: str = "Friend") -> Dict:
+    history = get_history(uid, mode)  # Mode now includes language
+    template = PROMPTS[mode]
+    system_prompt = template.format(USER_NAME=user_name)
+
+    if ctx := _history_context(history):
+        system_prompt += "\n\nLast turns:\n" + ctx
+    messages = (
+        [{"role":"system","content":system_prompt}]
+        + history[-HISTORY_WINDOW:]
+        + [{"role":"user","content":user_msg}]
+    )
+    resp = await client.chat.completions.create(model=MODEL_NAME,
+            messages=messages,response_format={"type": "json_object"}, temperature=0.7)
+    assistant = resp.choices[0].message.content.strip()
+    write_turns(uid,user_msg,assistant, mode)
+    return json.loads(assistant)
+
+async def _mentor_reply(uid:str, user_msg:str, language:str = "japanese", free_slot_iso:str|None=None)->Dict:
+    mode = f"mentor_{language}"
+    explicit = _wants_resources(user_msg)
+    cand = _extract_topic_with_language(user_msg, language)
+    generic = cand in _GENERIC_TOKENS
+    topic = (_last_topic.get(uid) or last_resource(uid) or cand) if generic else cand
+    if not generic: _last_topic[uid] = topic
+    if topic and not generic: inc_topic(uid,topic)
+    hits = topic_hits(uid,topic) if topic else 0
+    force = explicit or (hits>=RECOMMEND_AFTER_N_HITS)
+    if force and topic:
+        res = match_resources(topic)
+        res_lines = "\n".join(
+            f"- {r['title']} ({r['type']}, {r['study_time']} hrs, {r['difficulty']})"
+            for r in res) or "NONE"
+        if res: remember_resource(uid,res[0]["title"])
+    else:
+        res_lines="NONE"
+    
+    prompt_key = f"{language}_mentor" if language == "korean" else "mentor"
+    if prompt_key not in PROMPTS:
+        prompt_key = "mentor"
+        
+    sys_prompt = (PROMPTS[prompt_key]
+        + "\n\n### RESOURCE_CONTEXT\n" + (_context_snippet(topic) if topic else "")
+        + f"\n\nTOPIC_HITS: {RECOMMEND_AFTER_N_HITS if force else hits}"
+        + f"\n\nAVAILABLE_RESOURCES:\n{res_lines}")
+    if free_slot_iso: sys_prompt += f"\n\nFREE_SLOT: {free_slot_iso}"
+    messages = (
+        [{"role":"system","content":sys_prompt}]
+        + get_history(uid, mode)
+        + [{"role":"user","content":user_msg}]
+    )
+    resp = await client.chat.completions.create(model=MODEL_NAME,
+            messages=messages, response_format={"type": "json_object"}, temperature=0.7)
+    assistant = resp.choices[0].message.content.strip()
+    write_turns(uid,user_msg,assistant, mode)
+    return json.loads(assistant)
+
+async def _voice_reply(uid:str, user_msg:str, language:str = "japanese")->Dict:
+    mode = f"voice_{language}"
+    prompt_key = f"{language}_voice" if language == "korean" else "voice"
+    if prompt_key not in PROMPTS:
+        prompt_key = "voice"
+        
+    messages = (
+        [{"role":"system","content":PROMPTS[prompt_key]}]
+        + get_history(uid, mode)
+        + [{"role":"user","content":user_msg}]
+    )
+    resp = await client.chat.completions.create(model=MODEL_NAME,
+            messages=messages, response_format={"type": "json_object"}, temperature=0.7)
+    assistant = resp.choices[0].message.content.strip()
+    write_turns(uid,user_msg,assistant, mode)
+    return json.loads(assistant)
