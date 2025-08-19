@@ -9,18 +9,106 @@ const TEST_UID = 'demo';
 /* ─── Google-Sheets webhook ─── */
 const LOG_URL = "https://script.google.com/macros/s/AKfycbxBZ1hcCm2q5G7AdsrwErQe93ugrQoi4KMRx53jOe4jeAPHljAj11BVojzZEQHeYkc/exec";
 
-/** Fire-and-forget row writer */
-async function logTurn(mode, subMode, uid, payload) {
-  fetch(LOG_URL, {
-    method : 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body   : JSON.stringify({
-      sheet : mode,               // conversation | mentor | voice
-      uid,
-      sub   : subMode || '',      // casual / formal or ''
-      payload
-    })
-  }).catch(() => {});             // never block UI on log errors
+/** Enhanced logging with retry mechanism */
+async function logTurn(mode, subMode, uid, userInput, aiResponse, language, metadata = {}) {
+  const logData = {
+    timestamp: new Date().toISOString(),
+    sheet: mode,               // conversation | mentor | voice
+    uid,
+    language,
+    subMode: subMode || '',    // casual / formal or ''
+    userInput: userInput || '',
+    aiResponse: aiResponse || '',
+    metadata: JSON.stringify(metadata)
+  };
+
+  console.log('📊 Logging to Excel:', logData);
+
+  try {
+    const response = await fetch(LOG_URL, {
+      method: 'POST',
+      mode: 'no-cors', // Important for Google Apps Script
+      headers: { 
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(logData)
+    });
+    
+    console.log('✅ Log sent successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ Logging failed:', error);
+    
+    // Fallback: Store in localStorage for manual export
+    const fallbackKey = `tancho_logs_${Date.now()}`;
+    localStorage.setItem(fallbackKey, JSON.stringify(logData));
+    console.log('💾 Stored in localStorage as fallback:', fallbackKey);
+    
+    return false;
+  }
+}
+
+/* ───────── CSV Export Fallback ───────── */
+function exportLogsToCSV() {
+  const logs = [];
+  
+  // Get all tancho logs from localStorage
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key.startsWith('tancho_logs_')) {
+      try {
+        const logData = JSON.parse(localStorage.getItem(key));
+        logs.push(logData);
+      } catch (e) {
+        console.error('Failed to parse log:', key, e);
+      }
+    }
+  }
+  
+  if (logs.length === 0) {
+    alert('No logs found to export');
+    return;
+  }
+  
+  // Sort by timestamp
+  logs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  
+  // Create CSV content
+  const headers = ['Timestamp', 'Mode', 'Language', 'SubMode', 'User Input', 'AI Response', 'UID', 'Metadata'];
+  const csvContent = [
+    headers.join(','),
+    ...logs.map(log => [
+      log.timestamp,
+      log.sheet,
+      log.language,
+      log.subMode,
+      `"${(log.userInput || '').replace(/"/g, '""')}"`,
+      `"${(log.aiResponse || '').replace(/"/g, '""')}"`,
+      log.uid,
+      `"${(log.metadata || '').replace(/"/g, '""')}"`
+    ].join(','))
+  ].join('\n');
+  
+  // Download CSV
+  const blob = new Blob([csvContent], { type: 'text/csv' });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `tancho_logs_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  window.URL.revokeObjectURL(url);
+  
+  // Clear localStorage after export
+  const keysToRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key.startsWith('tancho_logs_')) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach(key => localStorage.removeItem(key));
+  
+  alert(`Exported ${logs.length} log entries to CSV`);
 }
 
 /* ─────────────────────────────────────────────────────────── */
@@ -56,7 +144,7 @@ function formatCorrection(wrong, fix, explanation) {
 export default function App() {
   const [mode, setMode]         = useState('conversation');
   const [convType, setConvType] = useState('convCasual'); // convCasual / convFormal
-  const [language, setLanguage] = useState('japanese');   // NEW: japanese / korean
+  const [language, setLanguage] = useState('japanese');   // japanese / korean
   const [input, setInput]       = useState('');
   const [file, setFile]         = useState(null);
   const [loading, setLoading]   = useState(false);
@@ -106,6 +194,7 @@ export default function App() {
     if (mode === 'voice' && !file && !recordedWav)
       return alert('Please record or select a file!');
 
+    const userInput = mode !== 'voice' ? input : 'Voice input';
     if (mode !== 'voice') pushMsg('user', input);
     setLoading(true);
 
@@ -116,7 +205,7 @@ export default function App() {
           uid: TEST_UID,
           mode: convType,
           userMessage: input,
-          language: language  // NEW: include language
+          language: language
         });
         const { reply, wrong, fix, explanation, chatTitle } = data;
 
@@ -133,18 +222,22 @@ export default function App() {
           </>
         );
 
+        // Enhanced logging
         await logTurn(
           'conversation',
-          `${convType}_${language}`,          // Include language in subMode
+          `${convType}_${language}`,
           TEST_UID,
-          { wrong, fix, reply, explanation, chatTitle, language }
+          input,
+          reply,
+          language,
+          { wrong, fix, explanation, chatTitle }
         );
       }
 
       /* ─── Mentor (stream) ─── */
       else if (mode === 'mentor') {
         pushMsg('assistant', ''); // placeholder
-        await doMentorStream(input);
+        const mentorResponse = await doMentorStream(input);
         setLoading(false);
         setInput('');
         return;
@@ -157,7 +250,7 @@ export default function App() {
         form.append('uid', TEST_UID);
         form.append('voiceMode', 'conversation');
         form.append('convSubMode', convType);
-        form.append('language', language);  // NEW: include language
+        form.append('language', language);
         form.append('audio', audioBlob,
           audioBlob instanceof File ? audioBlob.name : 'audio.wav');
 
@@ -168,10 +261,11 @@ export default function App() {
         pushMsg('user', transcript || en || jp);
 
         /* assistant bubble */
+        const aiResponse = jp + (en ? `\n${en}` : '');
         pushMsg(
           'assistant',
           <>
-            <div>{jp}{en ? `\n${en}` : ''}</div>
+            <div>{aiResponse}</div>
             {formatCorrection(null, null, correction)}
             {chatTitle && (
               <div className="text-xs text-gray-500 mt-1 italic">
@@ -187,7 +281,17 @@ export default function App() {
           </>
         );
 
-        await logTurn('voice', `${language}`, TEST_UID, { jp, en, correction, chatTitle, language });
+        // Enhanced logging
+        await logTurn(
+          'voice',
+          `${language}`,
+          TEST_UID,
+          transcript || 'Voice input',
+          aiResponse,
+          language,
+          { jp, en, correction, chatTitle, ttsUrl }
+        );
+        
         setFile(null); setRecordedWav(null);
       }
     } catch (err) {
@@ -201,6 +305,7 @@ export default function App() {
 
   /* ───────── Mentor stream helper ───────── */
   async function doMentorStream(question) {
+    let finalAnswer = '';
     try {
       const res = await fetch(`${API_BASE}/mentor`, {
         method: 'POST',
@@ -208,7 +313,7 @@ export default function App() {
         body: JSON.stringify({ 
           uid: TEST_UID, 
           question,
-          language: language  // NEW: include language
+          language: language
         })
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -238,24 +343,32 @@ export default function App() {
                 const { answer, recommendation, chatTitle } = finalData;
                 
                 // Replace the streamed content with the final parsed answer
-                let finalAnswer = answer || streamedContent;
+                finalAnswer = answer || streamedContent;
                 if (chatTitle) {
                   finalAnswer += `\n\n💡 Chat title: ${chatTitle}`;
                 }
                 
                 updateLastAssistantMsg(() => finalAnswer);
-                await logTurn('mentor', `${language}`, TEST_UID, { answer, recommendation, chatTitle, language });
+                
+                // Enhanced logging for mentor
+                await logTurn(
+                  'mentor',
+                  `${language}`,
+                  TEST_UID,
+                  question,
+                  answer,
+                  language,
+                  { recommendation, chatTitle }
+                );
               } catch (parseErr) {
                 console.error('Failed to parse final JSON:', parseErr);
-                // Keep the streamed content if JSON parsing fails
+                finalAnswer = streamedContent;
               }
             }
-            break; // Exit the streaming loop
+            break;
           } else if (block.startsWith('data:')) {
-            // Stream individual tokens but try to avoid JSON fragments
             const token = block.replace(/^data:\s*/, '');
             
-            // Skip obvious JSON fragments (starting with { or containing ")
             if (!token.startsWith('{') && !token.includes('"answer"') && !token.includes('"recommendation"')) {
               streamedContent += token;
               updateLastAssistantMsg(txt => txt + token);
@@ -267,13 +380,26 @@ export default function App() {
       updateLastAssistantMsg('[Error receiving mentor reply]');
       console.error(err);
     }
+    
+    return finalAnswer;
   }
 
   /* ───────── UI ───────── */
   return (
     <div className="flex flex-col h-screen bg-gray-100">
-      <header className="p-4 bg-blue-600 text-white text-xl font-semibold">
-        Tancho AI Tester - {language === 'korean' ? '한국어' : '日本語'}
+      <header className="p-4 bg-blue-600 text-white">
+        <div className="flex justify-between items-center">
+          <div className="text-xl font-semibold">
+            Tancho AI Tester - {language === 'korean' ? '한국어' : '日本語'}
+          </div>
+          <button
+            onClick={exportLogsToCSV}
+            className="px-3 py-1 bg-green-500 text-white text-sm rounded hover:bg-green-600"
+            title="Export conversation logs to CSV"
+          >
+            📊 Export CSV
+          </button>
+        </div>
       </header>
 
       <main className="flex-1 overflow-auto p-4 space-y-4">
@@ -321,7 +447,6 @@ export default function App() {
             </select>
           )}
 
-          {/* NEW: Language selector */}
           <select
             value={language}
             onChange={e => handleLanguageChange(e.target.value)}
