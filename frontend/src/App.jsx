@@ -9,17 +9,13 @@ const TEST_UID = 'demo';
 /* ─── Google-Sheets webhook ─── */
 const LOG_URL = "https://script.google.com/macros/s/AKfycbxBZ1hcCm2q5G7AdsrwErQe93ugrQoi4KMRx53jOe4jeAPHljAj11BVojzZEQHeYkc/exec";
 
-/** Enhanced logging with retry mechanism */
-async function logTurn(mode, subMode, uid, userInput, aiResponse, language, metadata = {}) {
+/** Enhanced logging - compatible with existing Google Sheets format */
+async function logTurn(mode, subMode, uid, payload) {
   const logData = {
-    timestamp: new Date().toISOString(),
     sheet: mode,               // conversation | mentor | voice
     uid,
-    language,
-    subMode: subMode || '',    // casual / formal or ''
-    userInput: userInput || '',
-    aiResponse: aiResponse || '',
-    metadata: JSON.stringify(metadata)
+    sub: subMode || '',        // casual / formal or ''
+    payload: payload           // Keep original payload structure
   };
 
   console.log('📊 Logging to Excel:', logData);
@@ -41,7 +37,17 @@ async function logTurn(mode, subMode, uid, userInput, aiResponse, language, meta
     
     // Fallback: Store in localStorage for manual export
     const fallbackKey = `tancho_logs_${Date.now()}`;
-    localStorage.setItem(fallbackKey, JSON.stringify(logData));
+    const enhancedLogData = {
+      timestamp: new Date().toISOString(),
+      mode,
+      language: payload.language || 'japanese',
+      subMode: subMode || '',
+      userInput: payload.userInput || '',
+      aiResponse: payload.reply || payload.answer || payload.jp || '',
+      uid,
+      metadata: JSON.stringify(payload)
+    };
+    localStorage.setItem(fallbackKey, JSON.stringify(enhancedLogData));
     console.log('💾 Stored in localStorage as fallback:', fallbackKey);
     
     return false;
@@ -55,7 +61,7 @@ function exportLogsToCSV() {
   // Get all tancho logs from localStorage
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key.startsWith('tancho_logs_')) {
+    if (key && key.startsWith('tancho_logs_')) {
       try {
         const logData = JSON.parse(localStorage.getItem(key));
         logs.push(logData);
@@ -73,20 +79,25 @@ function exportLogsToCSV() {
   // Sort by timestamp
   logs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   
-  // Create CSV content
-  const headers = ['Timestamp', 'Mode', 'Language', 'SubMode', 'User Input', 'AI Response', 'UID', 'Metadata'];
+  // Create CSV content matching your Google Sheets format
+  const headers = ['Timestamp', 'UID', 'SubMode', 'Wrong', 'Fix', 'Reply', 'Explanation', 'User Input', 'Language', 'Mode'];
   const csvContent = [
     headers.join(','),
-    ...logs.map(log => [
-      log.timestamp,
-      log.sheet,
-      log.language,
-      log.subMode,
-      `"${(log.userInput || '').replace(/"/g, '""')}"`,
-      `"${(log.aiResponse || '').replace(/"/g, '""')}"`,
-      log.uid,
-      `"${(log.metadata || '').replace(/"/g, '""')}"`
-    ].join(','))
+    ...logs.map(log => {
+      const metadata = JSON.parse(log.metadata || '{}');
+      return [
+        log.timestamp,
+        log.uid,
+        log.subMode,
+        `"${(metadata.wrong || '').replace(/"/g, '""')}"`,
+        `"${(metadata.fix || '').replace(/"/g, '""')}"`,
+        `"${(log.aiResponse || '').replace(/"/g, '""')}"`,
+        `"${(metadata.explanation || '').replace(/"/g, '""')}"`,
+        `"${(log.userInput || '').replace(/"/g, '""')}"`,
+        log.language,
+        log.mode
+      ].join(',');
+    })
   ].join('\n');
   
   // Download CSV
@@ -102,7 +113,7 @@ function exportLogsToCSV() {
   const keysToRemove = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key.startsWith('tancho_logs_')) {
+    if (key && key.startsWith('tancho_logs_')) {
       keysToRemove.push(key);
     }
   }
@@ -222,15 +233,12 @@ export default function App() {
           </>
         );
 
-        // Enhanced logging
+        // Enhanced logging - back to original format
         await logTurn(
           'conversation',
           `${convType}_${language}`,
           TEST_UID,
-          input,
-          reply,
-          language,
-          { wrong, fix, explanation, chatTitle }
+          { wrong, fix, reply, explanation, chatTitle, language, userInput: input }
         );
       }
 
@@ -281,15 +289,12 @@ export default function App() {
           </>
         );
 
-        // Enhanced logging
+        // Enhanced logging - back to original format
         await logTurn(
           'voice',
           `${language}`,
           TEST_UID,
-          transcript || 'Voice input',
-          aiResponse,
-          language,
-          { jp, en, correction, chatTitle, ttsUrl }
+          { jp, en, correction, chatTitle, ttsUrl, language, userInput: transcript || 'Voice input', transcript }
         );
         
         setFile(null); setRecordedWav(null);
@@ -350,15 +355,12 @@ export default function App() {
                 
                 updateLastAssistantMsg(() => finalAnswer);
                 
-                // Enhanced logging for mentor
+                // Enhanced logging for mentor - back to original format
                 await logTurn(
                   'mentor',
                   `${language}`,
                   TEST_UID,
-                  question,
-                  answer,
-                  language,
-                  { recommendation, chatTitle }
+                  { answer, recommendation, chatTitle, language, userInput: question }
                 );
               } catch (parseErr) {
                 console.error('Failed to parse final JSON:', parseErr);
