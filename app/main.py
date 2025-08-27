@@ -49,7 +49,7 @@ from app.dummy_store import (
     inc_topic, topic_hits,
     remember_resource, last_resource
 )
-from app.prompts   import PROMPTS
+from app.prompts   import PROMPTS, DICTIONARY_PROMPTS
 from app.resources import match_resources
 
 # ───────── config & constants ─────────
@@ -675,3 +675,188 @@ async def _voice_reply(uid:str, user_msg:str, language:str = "japanese")->Dict:
     assistant = resp.choices[0].message.content.strip()
     write_turns(uid,user_msg,assistant, mode)
     return json.loads(assistant)
+
+
+# ===============================================================
+# 4. Dictionary endpoint
+# ===============================================================
+
+class DictionaryRequest(BaseModel):
+    uid: str
+    word: str
+    language: Literal["japanese", "korean"] = "japanese"
+
+class DictionaryResponse(BaseModel):
+    word: str
+    reading: Optional[str] = None
+    level: Optional[str] = None
+    meanings: List[str]
+    part_of_speech: Optional[str] = None
+    kanji_breakdown: Optional[Dict] = None
+    hangul_breakdown: Optional[Dict] = None
+    example_sentences: List[Dict] = []
+    conjugations: Optional[List[Dict]] = None
+    found: bool = True
+    error: Optional[str] = None
+
+# In-memory cache for dictionary lookups
+_dictionary_cache: Dict[str, Dict] = {}
+
+def _cache_key(word: str, language: str) -> str:
+    return f"{language}:{word.lower().strip()}"
+
+def _increment_dictionary_stat(uid: str):
+    """Increment user's dictionary lookup counter"""
+    try:
+        # This would integrate with your existing stats system
+        # For now, just print - you can connect to Firestore later
+        print(f"📊 Dictionary lookup count incremented for user: {uid}")
+    except Exception as e:
+        print(f"Warning: Failed to increment dictionary stats: {e}")
+
+
+@app.post("/dictionary", response_model=DictionaryResponse)
+async def dictionary_lookup(body: DictionaryRequest):
+    uid, word, language = body.uid, body.word.strip(), body.language
+    
+    if not word:
+        return DictionaryResponse(
+            word="",
+            found=False,
+            error="Empty search query",
+            meanings=[]
+        )
+    
+    print(f"📚 Dictionary lookup - UID: {uid}, Language: {language}, Word: '{word}'")
+    
+    # Check cache first
+    cache_key = _cache_key(word, language)
+    if cache_key in _dictionary_cache:
+        print(f"💾 Cache hit for: {word}")
+        cached_result = _dictionary_cache[cache_key]
+        _increment_dictionary_stat(uid)
+        return DictionaryResponse(**cached_result)
+    
+    try:
+        # Get the appropriate prompt template
+        prompt_template = DICTIONARY_PROMPTS.get(language, DICTIONARY_PROMPTS["japanese"])
+        prompt = prompt_template.format(word=word)
+        
+        # Call OpenAI with explicit JSON mode instructions
+        response = await client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are a dictionary API. You MUST respond with valid JSON only. Do not use markdown formatting, code blocks, or any other formatting. Return raw JSON that can be parsed directly."
+                },
+                {
+                    "role": "user", 
+                    "content": prompt
+                }
+            ],
+            temperature=0.1,  # Very low temperature for consistent JSON
+            max_tokens=1000,
+            response_format={"type": "json_object"}  # Force JSON mode
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        print(f"🤖 AI Response length: {len(result_text)} chars")
+        
+        # Clean up any potential markdown formatting
+        if result_text.startswith('```json'):
+            result_text = result_text[7:]  # Remove ```json
+        if result_text.endswith('```'):
+            result_text = result_text[:-3]  # Remove ```
+        
+        result_text = result_text.strip()
+        
+        # Additional cleaning - remove any remaining markdown
+        import re
+        result_text = re.sub(r'^```\w*\n?', '', result_text)
+        result_text = re.sub(r'\n?```$', '', result_text)
+        
+        print(f"🧹 Cleaned response: {result_text[:100]}...")
+        
+        try:
+            # Parse the JSON response
+            result_data = json.loads(result_text)
+            
+            # Validate required fields
+            if "meanings" not in result_data:
+                result_data["meanings"] = []
+            if "found" not in result_data:
+                result_data["found"] = len(result_data["meanings"]) > 0
+                
+            # Cache the successful result
+            _dictionary_cache[cache_key] = result_data
+            
+            # Increment user stats
+            _increment_dictionary_stat(uid)
+            
+            print(f"✅ Dictionary lookup successful for: {word}")
+            return DictionaryResponse(**result_data)
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON parsing failed: {e}")
+            print(f"Raw response: {result_text[:200]}...")
+            
+            # Try to extract JSON from malformed response
+            try:
+                # Look for JSON object boundaries
+                start = result_text.find('{')
+                end = result_text.rfind('}') + 1
+                
+                if start >= 0 and end > start:
+                    json_part = result_text[start:end]
+                    print(f"🔧 Attempting to parse extracted JSON: {json_part[:100]}...")
+                    result_data = json.loads(json_part)
+                    
+                    # Validate and cache
+                    if "meanings" not in result_data:
+                        result_data["meanings"] = []
+                    if "found" not in result_data:
+                        result_data["found"] = len(result_data["meanings"]) > 0
+                    
+                    _dictionary_cache[cache_key] = result_data
+                    _increment_dictionary_stat(uid)
+                    
+                    print(f"✅ Dictionary lookup successful after JSON extraction for: {word}")
+                    return DictionaryResponse(**result_data)
+                    
+            except json.JSONDecodeError:
+                pass
+            
+            return DictionaryResponse(
+                word=word,
+                found=False,
+                error="Failed to parse dictionary response",
+                meanings=[]
+            )
+    
+    except Exception as e:
+        print(f"❌ Dictionary lookup failed: {e}")
+        return DictionaryResponse(
+            word=word,
+            found=False,
+            error=f"Dictionary service error: {str(e)}",
+            meanings=[]
+        )
+    
+# Optional: Dictionary cache management endpoints
+@app.get("/dictionary/cache/stats")
+async def dictionary_cache_stats():
+    """Get dictionary cache statistics"""
+    return {
+        "total_cached_entries": len(_dictionary_cache),
+        "cache_keys": list(_dictionary_cache.keys())[:10],  # Show first 10 keys
+        "memory_usage_mb": round(sys.getsizeof(_dictionary_cache) / 1024 / 1024, 2)
+    }
+
+@app.delete("/dictionary/cache")
+async def clear_dictionary_cache():
+    """Clear the dictionary cache"""
+    global _dictionary_cache
+    cache_size = len(_dictionary_cache)
+    _dictionary_cache.clear()
+    return {"message": f"Cleared {cache_size} cached entries"}

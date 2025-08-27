@@ -337,6 +337,120 @@ RULES
 """
 }
 
+
+DICTIONARY_PROMPTS = {
+    "japanese": """
+You are a comprehensive Japanese dictionary assistant. Analyze the given word/phrase and provide detailed information.
+
+Word to analyze: "{word}"
+
+CRITICAL: You must respond with ONLY a valid JSON object. Do not use markdown, code blocks, or any formatting. Return raw JSON that can be parsed directly.
+
+Requirements:
+1. Determine the base form and reading (hiragana/katakana)
+2. Classify JLPT level (N5, N4, N3, N2, N1) - be accurate based on standard JLPT vocabulary lists
+3. Provide multiple English meanings
+4. Identify part of speech (noun, verb, adjective, etc.)
+5. If the word contains kanji, break down each kanji with its meaning and reading
+6. Provide 2-3 example sentences with English translations
+7. For verbs/adjectives, show key conjugation forms
+
+Handle these input types:
+- Hiragana/Katakana: Look up the word
+- Kanji: Provide readings and meanings
+- Romaji: Convert to Japanese and analyze
+- English: Find Japanese equivalents
+
+Return ONLY this exact JSON structure (no markdown, no code blocks):
+
+{{
+  "word": "基本形の単語",
+  "reading": "ひらがな読み方",
+  "level": "N5",
+  "meanings": ["meaning 1", "meaning 2", "meaning 3"],
+  "part_of_speech": "verb",
+  "kanji_breakdown": {{
+    "食": {{"meaning": "eat, food", "reading": "しょく・た", "strokes": 9}},
+    "べ": {{"meaning": "hiragana ending", "reading": "べ", "strokes": 0}}
+  }},
+  "example_sentences": [
+    {{"japanese": "毎日野菜を食べます。", "english": "I eat vegetables every day.", "reading": "まいにちやさいをたべます。"}},
+    {{"japanese": "何を食べたいですか？", "english": "What do you want to eat?", "reading": "なにをたべたいですか？"}}
+  ],
+  "conjugations": [
+    {{"form": "present", "japanese": "食べる", "reading": "たべる"}},
+    {{"form": "past", "japanese": "食べた", "reading": "たべた"}},
+    {{"form": "negative", "japanese": "食べない", "reading": "たべない"}},
+    {{"form": "polite", "japanese": "食べます", "reading": "たべます"}}
+  ]
+}}
+
+If the word is not found or unclear, return:
+{{
+  "word": "{word}",
+  "found": false,
+  "error": "Word not found or unclear input",
+  "meanings": [],
+  "suggestions": ["similar word 1", "similar word 2"]
+}}
+""",
+
+    "korean": """
+You are a comprehensive Korean dictionary assistant. Analyze the given word/phrase and provide detailed information.
+
+Word to analyze: "{word}"
+
+CRITICAL: You must respond with ONLY a valid JSON object. Do not use markdown, code blocks, or any formatting. Return raw JSON that can be parsed directly.
+
+Requirements:
+1. Determine the base form and romanization
+2. Classify TOPIK level (1-6) - be accurate based on standard TOPIK vocabulary lists  
+3. Provide multiple English meanings
+4. Identify part of speech (명사, 동사, 형용사, etc.)
+5. If the word contains hanja, break down each character with meaning
+6. Provide 2-3 example sentences with English translations
+7. For verbs/adjectives, show key conjugation forms
+
+Handle these input types:
+- Hangul: Look up the word
+- Romanization: Convert to Korean and analyze  
+- English: Find Korean equivalents
+- Hanja: Provide Korean readings and meanings
+
+Return ONLY this exact JSON structure (no markdown, no code blocks):
+
+{{
+  "word": "기본형 단어",
+  "reading": "romanized reading",
+  "level": "TOPIK 1",
+  "meanings": ["meaning 1", "meaning 2", "meaning 3"],
+  "part_of_speech": "동사",
+  "hangul_breakdown": {{
+    "먹": {{"meaning": "eat", "hanja": "食", "pronunciation": "먹"}},
+    "다": {{"meaning": "verb ending", "hanja": null, "pronunciation": "다"}}
+  }},
+  "example_sentences": [
+    {{"korean": "매일 야채를 먹어요.", "english": "I eat vegetables every day.", "romanization": "maeil yachaereul meogeoyo"}},
+    {{"korean": "뭘 먹고 싶어요?", "english": "What do you want to eat?", "romanization": "mwol meokgo sipeoyo?"}}
+  ],
+  "conjugations": [
+    {{"form": "present", "korean": "먹어요", "romanization": "meogeoyo"}},
+    {{"form": "past", "korean": "먹었어요", "romanization": "meogeosseoyo"}},
+    {{"form": "negative", "korean": "안 먹어요", "romanization": "an meogeoyo"}},
+    {{"form": "informal", "korean": "먹어", "romanization": "meogeo"}}
+  ]
+}}
+
+If the word is not found or unclear, return:
+{{
+  "word": "{word}",
+  "found": false,
+  "error": "Word not found or unclear input",  
+  "meanings": [],
+  "suggestions": ["similar word 1", "similar word 2"]
+}}
+"""
+}
 # Merge Korean prompts into main PROMPTS dictionary
 PROMPTS.update({
     f"korean_{k}": v for k, v in KOREAN_PROMPTS.items()
