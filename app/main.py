@@ -49,7 +49,7 @@ from app.dummy_store import (
     inc_topic, topic_hits,
     remember_resource, last_resource
 )
-from app.prompts   import PROMPTS, DICTIONARY_PROMPTS
+from app.prompts   import PROMPTS, DICTIONARY_PROMPTS, SENTENCE_ANALYSIS_PROMPTS
 from app.resources import match_resources
 
 # ───────── config & constants ─────────
@@ -860,3 +860,360 @@ async def clear_dictionary_cache():
     cache_size = len(_dictionary_cache)
     _dictionary_cache.clear()
     return {"message": f"Cleared {cache_size} cached entries"}
+
+class SentenceAnalysisRequest(BaseModel):
+    uid: str
+    sentence: str
+    language: Literal["japanese", "korean"] = "japanese"
+    source_language: Literal["english", "japanese", "korean"] = "english"  # What language user typed in
+
+class SentenceAnalysisResponse(BaseModel):
+    # Core analysis
+    correctness_score: int  # 0-100
+    grammar_score: int
+    particle_score: int
+    word_usage_score: int
+    spelling_score: int
+    kanji_usage_score: Optional[int] = None  # Japanese only
+    
+    # User's input analysis
+    user_sentence_breakdown: List[Dict]  # Word-by-word analysis
+    user_meaning: str  # What the user actually said
+    user_highlighted_errors: str  # HTML with highlighted errors
+    
+    # AI corrections
+    ai_corrected_sentence: str  # Fixed version
+    ai_meaning: str  # What the corrected sentence means
+    ai_corrections_highlighted: str  # HTML showing changes
+    
+    # Explanations
+    corrections_explanation: List[Dict]  # Detailed explanations of each change
+    found: bool = True
+    error: Optional[str] = None
+
+
+
+@app.post("/analyze_sentence", response_model=SentenceAnalysisResponse)
+async def analyze_sentence(body: SentenceAnalysisRequest):
+    uid, sentence, language = body.uid, body.sentence.strip(), body.language
+    source_language = body.source_language
+    
+    # Input validation
+    if not sentence:
+        return SentenceAnalysisResponse(
+            correctness_score=0, grammar_score=0, particle_score=0,
+            word_usage_score=0, spelling_score=0,
+            user_sentence_breakdown=[], user_meaning="", user_highlighted_errors="",
+            ai_corrected_sentence="", ai_meaning="", ai_corrections_highlighted="",
+            corrections_explanation=[], found=False, error="Empty sentence"
+        )
+    
+    # Character/word limit (prevent abuse)
+    max_chars = 500
+    if len(sentence) > max_chars:
+        return SentenceAnalysisResponse(
+            correctness_score=0, grammar_score=0, particle_score=0,
+            word_usage_score=0, spelling_score=0,
+            user_sentence_breakdown=[], user_meaning="", user_highlighted_errors="",
+            ai_corrected_sentence="", ai_meaning="", ai_corrections_highlighted="",
+            corrections_explanation=[], found=False, 
+            error=f"Sentence too long. Maximum {max_chars} characters allowed."
+        )
+    
+    print(f"📝 Sentence analysis - UID: {uid}, Language: {language}, Sentence: '{sentence}'")
+    
+    try:
+        prompt_template = SENTENCE_ANALYSIS_PROMPTS.get(language, SENTENCE_ANALYSIS_PROMPTS["japanese"])
+        prompt = prompt_template.format(sentence=sentence, source_language=source_language)
+        
+        response = await client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a language analysis API. Respond with valid JSON only."
+                },
+                {
+                    "role": "user", 
+                    "content": prompt
+                }
+            ],
+            temperature=0.1,
+            max_tokens=2000,
+            response_format={"type": "json_object"}
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        
+        # Clean any markdown formatting
+        if result_text.startswith('```json'):
+            result_text = result_text[7:]
+        if result_text.endswith('```'):
+            result_text = result_text[:-3]
+        result_text = result_text.strip()
+        
+        try:
+            result_data = json.loads(result_text)
+            
+            # Validate required fields and set defaults
+            required_fields = {
+                "correctness_score": 0, "grammar_score": 0, "particle_score": 0,
+                "word_usage_score": 0, "spelling_score": 0, "user_sentence_breakdown": [],
+                "user_meaning": "", "user_highlighted_errors": "",
+                "ai_corrected_sentence": "", "ai_meaning": "", "ai_corrections_highlighted": "",
+                "corrections_explanation": []
+            }
+            
+            for field, default in required_fields.items():
+                if field not in result_data:
+                    result_data[field] = default
+            
+            print(f"✅ Sentence analysis successful for: {sentence}")
+            return SentenceAnalysisResponse(**result_data)
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON parsing failed: {e}")
+            return SentenceAnalysisResponse(
+                correctness_score=0, grammar_score=0, particle_score=0,
+                word_usage_score=0, spelling_score=0, user_sentence_breakdown=[],
+                user_meaning="", user_highlighted_errors="", ai_corrected_sentence="",
+                ai_meaning="", ai_corrections_highlighted="", corrections_explanation=[],
+                found=False, error="Failed to parse analysis response"
+            )
+    
+    except Exception as e:
+        print(f"❌ Sentence analysis failed: {e}")
+        return SentenceAnalysisResponse(
+            correctness_score=0, grammar_score=0, particle_score=0,
+            word_usage_score=0, spelling_score=0, user_sentence_breakdown=[],
+            user_meaning="", user_highlighted_errors="", ai_corrected_sentence="",
+            ai_meaning="", ai_corrections_highlighted="", corrections_explanation=[],
+            found=False, error=f"Analysis service error: {str(e)}"
+        )
+    
+
+# ===============================================================
+# 5. Sentence Analysis endpoint
+# ===============================================================
+
+class SentenceAnalysisRequest(BaseModel):
+    uid: str
+    sentence: str
+    language: Literal["japanese", "korean"] = "japanese"
+
+class GrammarBreakdown(BaseModel):
+    grammar: int        # 0-100
+    particles: int      # 0-100
+    wordUsage: int      # 0-100
+    spelling: int       # 0-100
+    kanjiUsage: Optional[int] = None    # Optional for Japanese
+    honorifics: Optional[int] = None    # Optional for Korean
+
+class WordAnalysis(BaseModel):
+    word: str
+    reading: Optional[str] = None
+    partOfSpeech: str
+    meaning: str
+    usage: str
+    isCorrect: bool
+    correction: Optional[str] = None
+    position: int       # Position in sentence for highlighting
+
+class Improvement(BaseModel):
+    type: str        # "grammar", "particle", "word_choice", etc.
+    explanation: str
+    original: str
+    corrected: str
+
+class SentenceAnalysisResponse(BaseModel):
+    originalSentence: str
+    correctnessScore: int # 0-100
+    grammarBreakdown: GrammarBreakdown
+    userTranslation: str
+    correctedSentence: str
+    correctedTranslation: str
+    improvements: List[Improvement]
+    wordAnalysis: List[WordAnalysis]
+    found: bool = True
+    error: Optional[str] = None
+
+# Sentence analysis cache
+_sentence_analysis_cache: Dict[str, Dict] = {}
+
+def _sentence_cache_key(sentence: str, language: str) -> str:
+    return f"{language}:{sentence.lower().strip()}"
+
+@app.post("/sentence_analysis", response_model=SentenceAnalysisResponse)
+async def analyze_sentence(body: SentenceAnalysisRequest):
+    uid, sentence, language = body.uid, body.sentence.strip(), body.language
+    
+    # Input validation
+    if not sentence:
+        return SentenceAnalysisResponse(
+            originalSentence="",
+            correctnessScore=0,
+            grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+            userTranslation="",
+            correctedSentence="",
+            correctedTranslation="",
+            improvements=[],
+            wordAnalysis=[],
+            found=False,
+            error="Empty sentence"
+        )
+    
+    # Character limit (prevent abuse)
+    max_chars = 500
+    if len(sentence) > max_chars:
+        return SentenceAnalysisResponse(
+            originalSentence=sentence,
+            correctnessScore=0,
+            grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+            userTranslation="",
+            correctedSentence="",
+            correctedTranslation="",
+            improvements=[],
+            wordAnalysis=[],
+            found=False,
+            error=f"Sentence too long. Maximum {max_chars} characters allowed."
+        )
+    
+    print(f"📝 Sentence analysis - UID: {uid}, Language: {language}, Sentence: '{sentence}'")
+    
+    # Check cache first
+    cache_key = _sentence_cache_key(sentence, language)
+    if cache_key in _sentence_analysis_cache:
+        print(f"💾 Cache hit for sentence: {sentence}")
+        cached_result = _sentence_analysis_cache[cache_key]
+        return SentenceAnalysisResponse(**cached_result)
+    
+    try:
+        # Get the appropriate prompt template
+        prompt_template = SENTENCE_ANALYSIS_PROMPTS.get(language, SENTENCE_ANALYSIS_PROMPTS["japanese"])
+        prompt = prompt_template.format(sentence=sentence)
+        
+        response = await client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a language analysis API. Respond with valid JSON only. Do not use markdown or code blocks."
+                },
+                {
+                    "role": "user", 
+                    "content": prompt
+                }
+            ],
+            temperature=0.1,  # Low temperature for consistent analysis
+            max_tokens=2000,
+            response_format={"type": "json_object"}
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        
+        # Clean any potential markdown formatting
+        if result_text.startswith('```json'):
+            result_text = result_text[7:]
+        if result_text.endswith('```'):
+            result_text = result_text[:-3]
+        result_text = result_text.strip()
+        
+        try:
+            # Parse the JSON response
+            result_data = json.loads(result_text)
+            
+            # Transform the data to match our response model
+            transformed_data = {
+                "originalSentence": sentence,
+                "correctnessScore": result_data.get("correctness_score", 0),
+                "grammarBreakdown": {
+                    "grammar": result_data.get("grammar_score", 0),
+                    "particles": result_data.get("particle_score", 0),
+                    "wordUsage": result_data.get("word_usage_score", 0),
+                    "spelling": result_data.get("spelling_score", 0),
+                    "kanjiUsage": result_data.get("kanji_usage_score") if language == "japanese" else None,
+                    "honorifics": result_data.get("honorifics_score") if language == "korean" else None
+                },
+                "userTranslation": result_data.get("user_meaning", ""),
+                "correctedSentence": result_data.get("corrected_sentence", ""),
+                "correctedTranslation": result_data.get("corrected_meaning", ""),
+                "improvements": [
+                    {
+                        "type": imp.get("type", "general"),
+                        "explanation": imp.get("explanation", ""),
+                        "original": imp.get("original", ""),
+                        "corrected": imp.get("corrected", "")
+                    }
+                    for imp in result_data.get("improvements", [])
+                ],
+                "wordAnalysis": [
+                    {
+                        "word": word.get("word", ""),
+                        "reading": word.get("reading"),
+                        "partOfSpeech": word.get("part_of_speech", ""),
+                        "meaning": word.get("meaning", ""),
+                        "usage": word.get("usage_note", ""),
+                        "isCorrect": word.get("is_correct", True),
+                        "correction": word.get("correction"),
+                        "position": word.get("position", 0)
+                    }
+                    for word in result_data.get("word_analysis", [])
+                ],
+                "found": True
+            }
+            
+            # Cache the result
+            _sentence_analysis_cache[cache_key] = transformed_data
+            
+            print(f"✅ Sentence analysis successful: {transformed_data['correctnessScore']}% correct")
+            return SentenceAnalysisResponse(**transformed_data)
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON parsing failed: {e}")
+            print(f"Raw response: {result_text[:200]}...")
+            
+            return SentenceAnalysisResponse(
+                originalSentence=sentence,
+                correctnessScore=0,
+                grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+                userTranslation="",
+                correctedSentence="",
+                correctedTranslation="",
+                improvements=[],
+                wordAnalysis=[],
+                found=False,
+                error="Failed to parse analysis response"
+            )
+    
+    except Exception as e:
+        print(f"❌ Sentence analysis failed: {e}")
+        return SentenceAnalysisResponse(
+            originalSentence=sentence,
+            correctnessScore=0,
+            grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+            userTranslation="",
+            correctedSentence="",
+            correctedTranslation="",
+            improvements=[],
+            wordAnalysis=[],
+            found=False,
+            error=f"Analysis service error: {str(e)}"
+        )
+
+# Cache management endpoints for sentence analysis
+@app.get("/sentence_analysis/cache/stats")
+async def sentence_analysis_cache_stats():
+    """Get sentence analysis cache statistics"""
+    return {
+        "total_cached_entries": len(_sentence_analysis_cache),
+        "cache_keys": list(_sentence_analysis_cache.keys())[:5],
+        "memory_usage_mb": round(sys.getsizeof(_sentence_analysis_cache) / 1024 / 1024, 2)
+    }
+
+@app.delete("/sentence_analysis/cache")
+async def clear_sentence_analysis_cache():
+    """Clear the sentence analysis cache"""
+    global _sentence_analysis_cache
+    cache_size = len(_sentence_analysis_cache)
+    _sentence_analysis_cache.clear()
+    return {"message": f"Cleared {cache_size} cached sentence analysis entries"}

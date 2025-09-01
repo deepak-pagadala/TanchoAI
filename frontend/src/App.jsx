@@ -5,14 +5,13 @@ import { ReactMic } from 'react-mic';
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 const TEST_UID = 'demo';                          
 
-
-/* ─── Google-Sheets webhook ─── */
+/* === Google-Sheets webhook === */
 const LOG_URL = "https://script.google.com/macros/s/AKfycbxBZ1hcCm2q5G7AdsrwErQe93ugrQoi4KMRx53jOe4jeAPHljAj11BVojzZEQHeYkc/exec";
 
 /** Enhanced logging - compatible with existing Google Sheets format */
 async function logTurn(mode, subMode, uid, payload) {
   const logData = {
-    sheet: mode,               // conversation | mentor | voice
+    sheet: mode,               // conversation | mentor | voice | dictionary | sentence_analysis
     uid,
     sub: subMode || '',        // casual / formal or ''
     payload: payload           // Keep original payload structure
@@ -54,7 +53,7 @@ async function logTurn(mode, subMode, uid, payload) {
   }
 }
 
-/* ───────── CSV Export Fallback ───────── */
+/* ================= CSV Export Fallback ================= */
 function exportLogsToCSV() {
   const logs = [];
   
@@ -122,7 +121,7 @@ function exportLogsToCSV() {
   alert(`Exported ${logs.length} log entries to CSV`);
 }
 
-/* ─────────────────────────────────────────────────────────── */
+/* ================================================================= */
 
 function formatCorrection(wrong, fix, explanation) {
   const strip = txt => txt?.replace(/<[^>]+>/g, '') ?? '';
@@ -132,7 +131,7 @@ function formatCorrection(wrong, fix, explanation) {
 
   return (
     <div className="bg-gray-100 border-l-4 border-yellow-400 p-3 mt-2 mb-1 text-sm">
-      <div className="mb-1 font-semibold">📝 Correction</div>
+      <div className="mb-1 font-semibold">🔍 Correction</div>
       {wrong && (
         <div>
           <span className="font-medium text-red-700">Wrong:</span>{' '}
@@ -150,15 +149,193 @@ function formatCorrection(wrong, fix, explanation) {
   );
 }
 
-/* ─────────────────────────────────────────────────────────── */
+/* === Dictionary Result Component === */
+function DictionaryResult({ result }) {
+  if (!result.found) {
+    return (
+      <div className="bg-red-50 border border-red-200 p-3 rounded mt-2">
+        <div className="text-red-800 font-medium">Not Found</div>
+        <div className="text-red-600 text-sm">{result.error}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-blue-50 border border-blue-200 p-4 rounded mt-2">
+      <div className="mb-2">
+        <span className="text-xl font-bold">{result.word}</span>
+        {result.reading && (
+          <span className="ml-2 text-gray-600">({result.reading})</span>
+        )}
+        {result.level && (
+          <span className="ml-2 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">
+            {result.level}
+          </span>
+        )}
+      </div>
+      
+      {result.part_of_speech && (
+        <div className="text-sm text-gray-600 mb-2">
+          <strong>Part of Speech:</strong> {result.part_of_speech}
+        </div>
+      )}
+      
+      <div className="mb-3">
+        <strong className="text-sm">Meanings:</strong>
+        <ul className="list-disc list-inside text-sm mt-1">
+          {result.meanings.map((meaning, i) => (
+            <li key={i}>{meaning}</li>
+          ))}
+        </ul>
+      </div>
+
+      {result.example_sentences && result.example_sentences.length > 0 && (
+        <div className="mb-3">
+          <strong className="text-sm">Examples:</strong>
+          <div className="mt-1 space-y-2">
+            {result.example_sentences.map((ex, i) => (
+              <div key={i} className="text-sm bg-white p-2 rounded">
+                <div className="font-medium">{ex.japanese || ex.korean}</div>
+                <div className="text-gray-600">{ex.english}</div>
+                {(ex.reading || ex.romanization) && (
+                  <div className="text-xs text-gray-500">{ex.reading || ex.romanization}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {result.conjugations && result.conjugations.length > 0 && (
+        <div>
+          <strong className="text-sm">Conjugations:</strong>
+          <div className="mt-1 grid grid-cols-2 gap-2">
+            {result.conjugations.map((conj, i) => (
+              <div key={i} className="text-sm bg-white p-2 rounded">
+                <div className="font-medium text-xs text-gray-500">{conj.form}</div>
+                <div>{conj.japanese || conj.korean}</div>
+                {(conj.reading || conj.romanization) && (
+                  <div className="text-xs text-gray-400">{conj.reading || conj.romanization}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* === Sentence Analysis Result Component === */
+function SentenceAnalysisResult({ result }) {
+  if (!result.found) {
+    return (
+      <div className="bg-red-50 border border-red-200 p-3 rounded mt-2">
+        <div className="text-red-800 font-medium">Analysis Failed</div>
+        <div className="text-red-600 text-sm">{result.error}</div>
+      </div>
+    );
+  }
+
+  const ScoreBar = ({ label, score, color = 'blue' }) => (
+    <div className="mb-2">
+      <div className="flex justify-between text-sm">
+        <span>{label}</span>
+        <span>{score}%</span>
+      </div>
+      <div className="w-full bg-gray-200 rounded-full h-2">
+        <div 
+          className={`bg-${color}-500 h-2 rounded-full`} 
+          style={{ width: `${score}%` }}
+        />
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="bg-green-50 border border-green-200 p-4 rounded mt-2">
+      <div className="mb-4">
+        <div className="text-lg font-bold mb-2">
+          Overall Score: {result.correctnessScore}%
+        </div>
+        
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <ScoreBar label="Grammar" score={result.grammarBreakdown?.grammar || 0} />
+            <ScoreBar label="Particles" score={result.grammarBreakdown?.particles || 0} />
+            <ScoreBar label="Word Usage" score={result.grammarBreakdown?.wordUsage || 0} />
+          </div>
+          <div>
+            <ScoreBar label="Spelling" score={result.grammarBreakdown?.spelling || 0} />
+            {result.grammarBreakdown?.kanjiUsage && (
+              <ScoreBar label="Kanji Usage" score={result.grammarBreakdown.kanjiUsage} />
+            )}
+            {result.grammarBreakdown?.honorifics && (
+              <ScoreBar label="Honorifics" score={result.grammarBreakdown.honorifics} />
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <strong className="text-sm">Your sentence:</strong>
+          <div className="bg-white p-2 rounded text-sm">{result.originalSentence}</div>
+        </div>
+
+        <div>
+          <strong className="text-sm">What you said:</strong>
+          <div className="bg-white p-2 rounded text-sm">{result.userTranslation}</div>
+        </div>
+
+        {result.correctedSentence && result.correctedSentence !== result.originalSentence && (
+          <>
+            <div>
+              <strong className="text-sm">Corrected version:</strong>
+              <div className="bg-green-100 p-2 rounded text-sm">{result.correctedSentence}</div>
+            </div>
+
+            <div>
+              <strong className="text-sm">Corrected meaning:</strong>
+              <div className="bg-green-100 p-2 rounded text-sm">{result.correctedTranslation}</div>
+            </div>
+          </>
+        )}
+
+        {result.improvements && result.improvements.length > 0 && (
+          <div>
+            <strong className="text-sm">Improvements:</strong>
+            <div className="mt-1 space-y-2">
+              {result.improvements.map((imp, i) => (
+                <div key={i} className="bg-yellow-50 border-l-4 border-yellow-400 p-2 text-sm">
+                  <div className="font-medium">{imp.type}</div>
+                  <div className="text-gray-700">{imp.explanation}</div>
+                  {imp.original !== imp.corrected && (
+                    <div className="mt-1">
+                      <span className="text-red-600">"{imp.original}"</span>
+                      <span className="mx-2">→</span>
+                      <span className="text-green-600">"{imp.corrected}"</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================= */
 
 export default function App() {
-  const [mode, setMode]         = useState('conversation');
+  const [mode, setMode] = useState('conversation');
   const [convType, setConvType] = useState('convCasual'); // convCasual / convFormal
   const [language, setLanguage] = useState('japanese');   // japanese / korean
-  const [input, setInput]       = useState('');
-  const [file, setFile]         = useState(null);
-  const [loading, setLoading]   = useState(false);
+  const [input, setInput] = useState('');
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState([]);
 
   // voice recording
@@ -189,17 +366,21 @@ export default function App() {
     const label =
       val === 'conversation'
         ? `Conversation (${convType})`
+        : val === 'dictionary'
+        ? 'Dictionary Lookup'
+        : val === 'sentence_analysis'
+        ? 'Sentence Analysis'
         : val.charAt(0).toUpperCase() + val.slice(1);
-    pushMsg('system', `―― Switched to ${label} Mode (${language}) ――`);
+    pushMsg('system', `――― Switched to ${label} Mode (${language}) ―――`);
     setFile(null); setRecordedWav(null); setIsRecording(false);
   };
 
   const handleLanguageChange = val => {
     setLanguage(val);
-    pushMsg('system', `―― Language changed to ${val.charAt(0).toUpperCase() + val.slice(1)} ――`);
+    pushMsg('system', `――― Language changed to ${val.charAt(0).toUpperCase() + val.slice(1)} ―――`);
   };
 
-  /* ───────── Submit ───────── */
+  /* ========= Submit ========= */
   async function handleSubmit() {
     if (mode !== 'voice' && !input) return;
     if (mode === 'voice' && !file && !recordedWav)
@@ -210,7 +391,7 @@ export default function App() {
     setLoading(true);
 
     try {
-      /* ─── Conversation ─── */
+      /* === Conversation === */
       if (mode === 'conversation') {
         const { data } = await axios.post(`${API_BASE}/chat`, {
           uid: TEST_UID,
@@ -233,7 +414,6 @@ export default function App() {
           </>
         );
 
-        // Enhanced logging - back to original format
         await logTurn(
           'conversation',
           `${convType}_${language}`,
@@ -242,7 +422,49 @@ export default function App() {
         );
       }
 
-      /* ─── Mentor (stream) ─── */
+      /* === Dictionary === */
+      else if (mode === 'dictionary') {
+        const { data } = await axios.post(`${API_BASE}/dictionary`, {
+          uid: TEST_UID,
+          word: input,
+          language: language
+        });
+
+        pushMsg(
+          'assistant',
+          <DictionaryResult result={data} />
+        );
+
+        await logTurn(
+          'dictionary',
+          language,
+          TEST_UID,
+          { word: input, result: data, language, userInput: input }
+        );
+      }
+
+      /* === Sentence Analysis === */
+      else if (mode === 'sentence_analysis') {
+        const { data } = await axios.post(`${API_BASE}/sentence_analysis`, {
+          uid: TEST_UID,
+          sentence: input,
+          language: language
+        });
+
+        pushMsg(
+          'assistant',
+          <SentenceAnalysisResult result={data} />
+        );
+
+        await logTurn(
+          'sentence_analysis',
+          language,
+          TEST_UID,
+          { sentence: input, result: data, language, userInput: input }
+        );
+      }
+
+      /* === Mentor (stream) === */
       else if (mode === 'mentor') {
         pushMsg('assistant', ''); // placeholder
         const mentorResponse = await doMentorStream(input);
@@ -251,7 +473,7 @@ export default function App() {
         return;
       }
 
-      /* ─── Voice ─── */
+      /* === Voice === */
       else {
         const audioBlob = recordedWav || file;
         const form = new FormData();
@@ -289,7 +511,6 @@ export default function App() {
           </>
         );
 
-        // Enhanced logging - back to original format
         await logTurn(
           'voice',
           `${language}`,
@@ -308,7 +529,7 @@ export default function App() {
     }
   }
 
-  /* ───────── Mentor stream helper ───────── */
+  /* ========= Mentor stream helper ========= */
   async function doMentorStream(question) {
     let finalAnswer = '';
     try {
@@ -355,7 +576,6 @@ export default function App() {
                 
                 updateLastAssistantMsg(() => finalAnswer);
                 
-                // Enhanced logging for mentor - back to original format
                 await logTurn(
                   'mentor',
                   `${language}`,
@@ -386,7 +606,7 @@ export default function App() {
     return finalAnswer;
   }
 
-  /* ───────── UI ───────── */
+  /* ========= UI ========= */
   return (
     <div className="flex flex-col h-screen bg-gray-100">
       <header className="p-4 bg-blue-600 text-white">
@@ -433,9 +653,11 @@ export default function App() {
             onChange={e => handleModeChange(e.target.value)}
             className="p-2 border rounded"
           >
-            <option value="conversation">Conversation</option>
-            <option value="mentor">Mentor</option>
-            <option value="voice">Voice</option>
+            <option value="conversation">💬 Conversation</option>
+            <option value="mentor">🎓 Mentor</option>
+            <option value="voice">🎤 Voice</option>
+            <option value="dictionary">🔍 Dictionary</option>
+            <option value="sentence_analysis">📝 Sentence Analysis</option>
           </select>
 
           {mode === 'conversation' && (
@@ -512,7 +734,11 @@ export default function App() {
             onChange={e => setInput(e.target.value)}
             className="w-full p-2 border rounded mt-2"
             placeholder={
-              language === 'korean' 
+              mode === 'dictionary' 
+                ? (language === 'korean' ? "단어를 입력하세요..." : "単語を入力してください...")
+                : mode === 'sentence_analysis'
+                ? (language === 'korean' ? "분석할 문장을 입력하세요..." : "分析する文章を入力してください...")
+                : language === 'korean' 
                 ? "메시지를 입력하세요..." 
                 : "Type a message…"
             }
@@ -524,7 +750,10 @@ export default function App() {
           disabled={loading}
           className="w-full bg-blue-600 text-white py-2 rounded mt-2 hover:bg-blue-700 disabled:opacity-50"
         >
-          {loading ? (language === 'korean' ? '처리 중...' : 'Processing…') : (language === 'korean' ? '전송' : 'Send')}
+          {loading ? (language === 'korean' ? '처리 중...' : 'Processing…') : 
+           mode === 'dictionary' ? (language === 'korean' ? '검색' : 'Look up') :
+           mode === 'sentence_analysis' ? (language === 'korean' ? '분석' : 'Analyze') :
+           (language === 'korean' ? '전송' : 'Send')}
         </button>
       </footer>
     </div>

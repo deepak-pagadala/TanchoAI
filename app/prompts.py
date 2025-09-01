@@ -455,3 +455,195 @@ If the word is not found or unclear, return:
 PROMPTS.update({
     f"korean_{k}": v for k, v in KOREAN_PROMPTS.items()
 })
+
+# Replace the SENTENCE_ANALYSIS_PROMPTS in your prompts.py with this:
+
+SENTENCE_ANALYSIS_PROMPTS = {
+    "japanese": """
+You are an expert Japanese language teacher. Analyze this sentence for grammatical correctness and provide detailed feedback.
+
+Sentence to analyze: "{sentence}"
+
+Analyze the sentence and provide:
+1. Overall correctness score (0-100)
+2. Individual component scores
+3. Word-by-word analysis with part of speech and corrections
+4. Translation of what the user actually wrote
+5. Corrected version of the sentence
+6. Translation of the corrected sentence
+7. Specific improvements needed
+
+Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
+
+{{
+  "correctness_score": 75,
+  "grammar_score": 80,
+  "particle_score": 70,
+  "word_usage_score": 85,
+  "spelling_score": 90,
+  "kanji_usage_score": 75,
+  "word_analysis": [
+    {{
+      "word": "友達",
+      "reading": "ともだち", 
+      "part_of_speech": "名詞",
+      "meaning": "friend",
+      "usage_note": "Correct usage",
+      "is_correct": true,
+      "position": 0
+    }},
+    {{
+      "word": "を",
+      "reading": "を",
+      "part_of_speech": "助詞", 
+      "meaning": "object particle",
+      "usage_note": "Wrong particle - should be topic marker",
+      "is_correct": false,
+      "correction": "は",
+      "position": 1
+    }},
+    {{
+      "word": "いない",
+      "reading": "いない",
+      "part_of_speech": "動詞",
+      "meaning": "not exist/not have",
+      "usage_note": "Correct usage",
+      "is_correct": true,
+      "position": 2
+    }}
+  ],
+  "user_meaning": "Friends (object) don't exist",
+  "corrected_sentence": "友達はいない",
+  "corrected_meaning": "I don't have friends",
+  "improvements": [
+    {{
+      "type": "particle",
+      "explanation": "Use は (wa) as topic particle instead of を (wo) object particle",
+      "original": "を",
+      "corrected": "は"
+    }}
+  ]
+}}
+
+For sentences with no errors:
+{{
+  "correctness_score": 100,
+  "grammar_score": 100,
+  "particle_score": 100,
+  "word_usage_score": 100,
+  "spelling_score": 100,
+  "kanji_usage_score": 100,
+  "word_analysis": [...word breakdown...],
+  "user_meaning": "Perfect translation",
+  "corrected_sentence": "Same as original",
+  "corrected_meaning": "Same as user meaning", 
+  "improvements": []
+}}
+
+For unclear input:
+{{
+  "correctness_score": 0,
+  "found": false,
+  "error": "Could not understand sentence",
+  "user_meaning": "",
+  "corrected_sentence": "",
+  "corrected_meaning": "",
+  "improvements": [],
+  "word_analysis": []
+}}
+""",
+
+    "korean": """
+You are an expert Korean language teacher. Analyze this sentence for grammatical correctness and provide detailed feedback.
+
+Sentence to analyze: "{sentence}"
+
+Analyze the sentence and provide:
+1. Overall correctness score (0-100)
+2. Individual component scores including honorifics
+3. Word-by-word analysis with part of speech and corrections
+4. Translation of what the user actually wrote
+5. Corrected version of the sentence  
+6. Translation of the corrected sentence
+7. Specific improvements needed
+
+Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
+
+{{
+  "correctness_score": 80,
+  "grammar_score": 85,
+  "particle_score": 75,
+  "word_usage_score": 80,
+  "spelling_score": 90,
+  "honorifics_score": 85,
+  "word_analysis": [
+    {{
+      "word": "친구",
+      "reading": "chingu",
+      "part_of_speech": "명사",
+      "meaning": "friend",
+      "usage_note": "Correct usage",
+      "is_correct": true,
+      "position": 0
+    }},
+    {{
+      "word": "은",
+      "reading": "eun", 
+      "part_of_speech": "조사",
+      "meaning": "topic particle",
+      "usage_note": "Wrong particle after consonant",
+      "is_correct": false,
+      "correction": "가",
+      "position": 1
+    }},
+    {{
+      "word": "없어요",
+      "reading": "eopsseoyo",
+      "part_of_speech": "동사",
+      "meaning": "don't have",
+      "usage_note": "Correct polite form",
+      "is_correct": true,
+      "position": 2
+    }}
+  ],
+  "user_meaning": "As for friends, don't have them",
+  "corrected_sentence": "친구가 없어요",
+  "corrected_meaning": "I don't have friends",
+  "improvements": [
+    {{
+      "type": "particle",
+      "explanation": "Use 가 as subject particle after consonant-ending nouns instead of 은",
+      "original": "은",
+      "corrected": "가"
+    }}
+  ]
+}}
+
+For sentences with no errors:
+{{
+  "correctness_score": 100,
+  "grammar_score": 100,
+  "particle_score": 100,
+  "word_usage_score": 100,
+  "spelling_score": 100,
+  "honorifics_score": 100,
+  "word_analysis": [...word breakdown...],
+  "user_meaning": "Perfect translation",
+  "corrected_sentence": "Same as original",
+  "corrected_meaning": "Same as user meaning",
+  "improvements": []
+}}
+
+For unclear input:
+{{
+  "correctness_score": 0,
+  "found": false,
+  "error": "Could not understand sentence",
+  "user_meaning": "",
+  "corrected_sentence": "",
+  "corrected_meaning": "",
+  "improvements": [],
+  "word_analysis": []
+}}
+"""
+}
