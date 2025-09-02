@@ -189,6 +189,56 @@ function DictionaryResult({ result }) {
         </ul>
       </div>
 
+      {/* Kanji Breakdown (Japanese) */}
+      {result.kanji_breakdown && Object.keys(result.kanji_breakdown).length > 0 && (
+        <div className="mb-3">
+          <strong className="text-sm">Kanji Breakdown:</strong>
+          <div className="mt-1 grid grid-cols-1 gap-2">
+            {Object.entries(result.kanji_breakdown).map(([kanji, info], i) => (
+              <div key={i} className="text-sm bg-white p-2 rounded border-l-4 border-orange-400">
+                <div className="flex items-center justify-between">
+                  <span className="text-lg font-bold text-orange-700">{kanji}</span>
+                  <span className="text-xs text-gray-500">
+                    {info.strokes ? `${info.strokes} strokes` : ''}
+                  </span>
+                </div>
+                <div className="text-gray-700">
+                  <strong>Reading:</strong> {info.reading}
+                </div>
+                <div className="text-gray-700">
+                  <strong>Meaning:</strong> {info.meaning}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Hangul Breakdown (Korean) */}
+      {result.hangul_breakdown && Object.keys(result.hangul_breakdown).length > 0 && (
+        <div className="mb-3">
+          <strong className="text-sm">Character Breakdown:</strong>
+          <div className="mt-1 grid grid-cols-1 gap-2">
+            {Object.entries(result.hangul_breakdown).map(([char, info], i) => (
+              <div key={i} className="text-sm bg-white p-2 rounded border-l-4 border-green-400">
+                <div className="flex items-center justify-between">
+                  <span className="text-lg font-bold text-green-700">{char}</span>
+                  {info.hanja && (
+                    <span className="text-sm text-gray-600">Hanja: {info.hanja}</span>
+                  )}
+                </div>
+                <div className="text-gray-700">
+                  <strong>Pronunciation:</strong> {info.pronunciation}
+                </div>
+                <div className="text-gray-700">
+                  <strong>Meaning:</strong> {info.meaning}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {result.example_sentences && result.example_sentences.length > 0 && (
         <div className="mb-3">
           <strong className="text-sm">Examples:</strong>
