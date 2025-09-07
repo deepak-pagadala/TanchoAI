@@ -49,7 +49,7 @@ from app.dummy_store import (
     inc_topic, topic_hits,
     remember_resource, last_resource
 )
-from app.prompts   import PROMPTS, DICTIONARY_PROMPTS, SENTENCE_ANALYSIS_PROMPTS
+from app.prompts   import PROMPTS, DICTIONARY_PROMPTS, SENTENCE_ANALYSIS_PROMPTS, CONJUGATION_PROMPTS
 from app.resources import match_resources
 
 # ───────── config & constants ─────────
@@ -1217,3 +1217,197 @@ async def clear_sentence_analysis_cache():
     cache_size = len(_sentence_analysis_cache)
     _sentence_analysis_cache.clear()
     return {"message": f"Cleared {cache_size} cached sentence analysis entries"}
+
+
+# ===============================================================
+# 6. Conjugation Analysis endpoint
+# ===============================================================
+
+class ConjugationRequest(BaseModel):
+    uid: str
+    word: str
+    language: Literal["japanese", "korean"] = "japanese"
+
+class ConjugationForm(BaseModel):
+    formName: str
+    conjugated: str
+    reading: Optional[str] = None
+    romanization: Optional[str] = None
+    explanation: str
+    usage: str
+    politenessLevel: Optional[str] = None  # casual, polite, formal
+
+class VerbInfo(BaseModel):
+    baseForm: str
+    reading: Optional[str] = None
+    romanization: Optional[str] = None
+    meaning: str
+    verbType: str  # "regular verb", "irregular verb", "adjective", etc.
+    conjugationGroup: Optional[str] = None  # "ichidan", "godan", "irregular" for Japanese
+    isConjugated: bool
+    originalInput: str
+
+class ConjugationResponse(BaseModel):
+    verbInfo: VerbInfo
+    conjugations: Dict[str, List[ConjugationForm]]  # grouped by category
+    found: bool = True
+    error: Optional[str] = None
+
+# Conjugation analysis cache
+_conjugation_cache: Dict[str, Dict] = {}
+
+def _conjugation_cache_key(word: str, language: str) -> str:
+    return f"{language}:conjugation:{word.lower().strip()}"
+
+@app.post("/conjugation", response_model=ConjugationResponse)
+async def analyze_conjugation(body: ConjugationRequest):
+    uid, word, language = body.uid, body.word.strip(), body.language
+    
+    if not word:
+        return ConjugationResponse(
+            verbInfo=VerbInfo(
+                baseForm="", reading=None, romanization=None, meaning="", 
+                verbType="", isConjugated=False, originalInput=""
+            ),
+            conjugations={},
+            found=False,
+            error="Empty word provided"
+        )
+    
+    print(f"🔄 Conjugation analysis - UID: {uid}, Language: {language}, Word: '{word}'")
+    
+    # Check cache first
+    cache_key = _conjugation_cache_key(word, language)
+    if cache_key in _conjugation_cache:
+        print(f"💾 Cache hit for conjugation: {word}")
+        cached_result = _conjugation_cache[cache_key]
+        return ConjugationResponse(**cached_result)
+    
+    try:
+        # Get the appropriate prompt template
+        prompt_template = CONJUGATION_PROMPTS.get(language, CONJUGATION_PROMPTS["japanese"])
+        prompt = prompt_template.format(word=word)
+        
+        response = await client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a language conjugation expert. Respond with valid JSON only."
+                },
+                {
+                    "role": "user", 
+                    "content": prompt
+                }
+            ],
+            temperature=0.1,
+            max_tokens=2500,
+            response_format={"type": "json_object"}
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        
+        # Clean any potential markdown formatting
+        if result_text.startswith('```json'):
+            result_text = result_text[7:]
+        if result_text.endswith('```'):
+            result_text = result_text[:-3]
+        result_text = result_text.strip()
+        
+        try:
+            result_data = json.loads(result_text)
+            
+            # Validate required fields
+            if "verb_info" not in result_data:
+                result_data["verb_info"] = {
+                    "base_form": word,
+                    "meaning": "Unknown",
+                    "verb_type": "Unknown",
+                    "is_conjugated": False,
+                    "original_input": word
+                }
+            if "conjugations" not in result_data:
+                result_data["conjugations"] = {}
+            if "found" not in result_data:
+                result_data["found"] = True
+            
+            # Transform to match our response model
+            transformed_data = {
+                "verbInfo": {
+                    "baseForm": result_data["verb_info"].get("base_form", word),
+                    "reading": result_data["verb_info"].get("reading"),
+                    "romanization": result_data["verb_info"].get("romanization"),
+                    "meaning": result_data["verb_info"].get("meaning", "Unknown"),
+                    "verbType": result_data["verb_info"].get("verb_type", "Unknown"),
+                    "conjugationGroup": result_data["verb_info"].get("conjugation_group"),
+                    "isConjugated": result_data["verb_info"].get("is_conjugated", False),
+                    "originalInput": word
+                },
+                "conjugations": {},
+                "found": result_data.get("found", True)
+            }
+            
+            # Transform conjugations
+            for category, forms in result_data.get("conjugations", {}).items():
+                transformed_forms = []
+                for form in forms:
+                    transformed_forms.append({
+                        "formName": form.get("form_name", ""),
+                        "conjugated": form.get("conjugated", ""),
+                        "reading": form.get("reading"),
+                        "romanization": form.get("romanization"),
+                        "explanation": form.get("explanation", ""),
+                        "usage": form.get("usage", ""),
+                        "politenessLevel": form.get("politeness_level")
+                    })
+                transformed_data["conjugations"][category] = transformed_forms
+            
+            # Cache the result
+            _conjugation_cache[cache_key] = transformed_data
+            
+            print(f"✅ Conjugation analysis successful for: {word}")
+            return ConjugationResponse(**transformed_data)
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON parsing failed: {e}")
+            print(f"Raw response: {result_text[:200]}...")
+            
+            return ConjugationResponse(
+                verbInfo=VerbInfo(
+                    baseForm=word, reading=None, romanization=None, meaning="Unknown", 
+                    verbType="Unknown", isConjugated=False, originalInput=word
+                ),
+                conjugations={},
+                found=False,
+                error="Failed to parse conjugation response"
+            )
+    
+    except Exception as e:
+        print(f"❌ Conjugation analysis failed: {e}")
+        return ConjugationResponse(
+            verbInfo=VerbInfo(
+                baseForm=word, reading=None, romanization=None, meaning="Unknown", 
+                verbType="Unknown", isConjugated=False, originalInput=word
+            ),
+            conjugations={},
+            found=False,
+            error=f"Conjugation service error: {str(e)}"
+        )
+
+# Cache management endpoints for conjugation analysis
+@app.get("/conjugation/cache/stats")
+async def conjugation_cache_stats():
+    """Get conjugation cache statistics"""
+    return {
+        "total_cached_entries": len(_conjugation_cache),
+        "cache_keys": list(_conjugation_cache.keys())[:5],
+        "memory_usage_mb": round(sys.getsizeof(_conjugation_cache) / 1024 / 1024, 2)
+    }
+
+@app.delete("/conjugation/cache")
+async def clear_conjugation_cache():
+    """Clear the conjugation cache"""
+    global _conjugation_cache
+    cache_size = len(_conjugation_cache)
+    _conjugation_cache.clear()
+    return {"message": f"Cleared {cache_size} cached conjugation entries"}

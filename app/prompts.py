@@ -647,3 +647,283 @@ For unclear input:
 }}
 """
 }
+
+
+CONJUGATION_PROMPTS = {
+    "japanese": """
+You are an expert Japanese conjugation analyzer. Analyze the given word and provide comprehensive conjugation information.
+
+Word to analyze: "{word}"
+
+Your task:
+1. Determine if this is a verb, adjective, or already conjugated form
+2. Find the base/dictionary form if it's conjugated
+3. Identify the verb type (ichidan, godan, irregular, i-adjective, na-adjective)
+4. Provide all major conjugation forms organized by category
+
+CRITICAL: Return ONLY valid JSON with this exact structure:
+
+{{
+  "verb_info": {{
+    "base_form": "する",
+    "reading": "する", 
+    "meaning": "to do",
+    "verb_type": "irregular verb",
+    "conjugation_group": "irregular",
+    "is_conjugated": false,
+    "original_input": "{word}"
+  }},
+  "conjugations": {{
+    "Present": [
+      {{
+        "form_name": "Present Casual",
+        "conjugated": "する",
+        "reading": "する",
+        "explanation": "Dictionary form",
+        "usage": "Casual speech",
+        "politeness_level": "casual"
+      }},
+      {{
+        "form_name": "Present Polite", 
+        "conjugated": "します",
+        "reading": "します",
+        "explanation": "Polite present form",
+        "usage": "Formal/polite speech",
+        "politeness_level": "polite"
+      }}
+    ],
+    "Past": [
+      {{
+        "form_name": "Past Casual",
+        "conjugated": "した",
+        "reading": "した", 
+        "explanation": "Casual past tense",
+        "usage": "Completed action (casual)",
+        "politeness_level": "casual"
+      }},
+      {{
+        "form_name": "Past Polite",
+        "conjugated": "しました",
+        "reading": "しました",
+        "explanation": "Polite past tense", 
+        "usage": "Completed action (formal)",
+        "politeness_level": "polite"
+      }}
+    ],
+    "Negative": [
+      {{
+        "form_name": "Negative Casual",
+        "conjugated": "しない",
+        "reading": "しない",
+        "explanation": "Casual negative",
+        "usage": "Don't do (casual)",
+        "politeness_level": "casual"
+      }},
+      {{
+        "form_name": "Negative Polite",
+        "conjugated": "しません", 
+        "reading": "しません",
+        "explanation": "Polite negative",
+        "usage": "Don't do (formal)",
+        "politeness_level": "polite"
+      }}
+    ],
+    "Te-form & Others": [
+      {{
+        "form_name": "Te-form",
+        "conjugated": "して",
+        "reading": "して",
+        "explanation": "Connecting form",
+        "usage": "Used to connect verbs, make requests",
+        "politeness_level": "neutral"
+      }},
+      {{
+        "form_name": "Potential",
+        "conjugated": "できる",
+        "reading": "できる", 
+        "explanation": "Can do/able to do",
+        "usage": "Express ability or possibility",
+        "politeness_level": "neutral"
+      }}
+    ],
+    "Conditionals": [
+      {{
+        "form_name": "Ba-form",
+        "conjugated": "すれば",
+        "reading": "すれば",
+        "explanation": "If/when conditional",
+        "usage": "If you do",
+        "politeness_level": "neutral"
+      }}
+    ]
+  }}
+}}
+
+Handle these input types:
+- Dictionary form verbs/adjectives: Provide full conjugation
+- Already conjugated forms: Identify base form and show it's a conjugation of that base
+- Invalid/unclear input: Return found: false with error
+
+For conjugated inputs like "させる" (causative of する), show:
+- base_form: "する"  
+- is_conjugated: true
+- Include the causative form in the conjugations
+
+Categories to include:
+- Present (casual, polite)
+- Past (casual, polite, negative past)
+- Negative (casual, polite)
+- Te-form & Others (te-form, potential, passive, causative)
+- Conditionals (ba-form, tara-form)
+- Imperative (command forms)
+- Volitional (let's do)
+
+For adjectives, include:
+- Present/Past (affirmative/negative)
+- Adverbial form
+- Conditional forms
+""",
+
+    "korean": """
+You are an expert Korean conjugation analyzer. Analyze the given word and provide comprehensive conjugation information.
+
+Word to analyze: "{word}"
+
+Your task:
+1. Determine if this is a verb, adjective, or already conjugated form  
+2. Find the base/dictionary form if it's conjugated
+3. Identify the verb type (regular, irregular, ㅎ irregular, etc.)
+4. Provide all major conjugation forms organized by category
+
+CRITICAL: Return ONLY valid JSON with this exact structure:
+
+{{
+  "verb_info": {{
+    "base_form": "하다",
+    "romanization": "hada",
+    "meaning": "to do", 
+    "verb_type": "regular verb",
+    "conjugation_group": "하다 verb",
+    "is_conjugated": false,
+    "original_input": "{word}"
+  }},
+  "conjugations": {{
+    "Declarative Present": [
+      {{
+        "form_name": "Informal Low",
+        "conjugated": "해",
+        "romanization": "hae", 
+        "explanation": "Casual present form",
+        "usage": "Informal speech to friends/family",
+        "politeness_level": "casual"
+      }},
+      {{
+        "form_name": "Informal High", 
+        "conjugated": "해요",
+        "romanization": "haeyo",
+        "explanation": "Polite present form",
+        "usage": "Polite speech in daily conversation", 
+        "politeness_level": "polite"
+      }},
+      {{
+        "form_name": "Formal Low",
+        "conjugated": "한다",
+        "romanization": "handa", 
+        "explanation": "Formal present declarative",
+        "usage": "Writing, formal speech",
+        "politeness_level": "formal"
+      }},
+      {{
+        "form_name": "Formal High",
+        "conjugated": "합니다",
+        "romanization": "hamnida",
+        "explanation": "Very formal present",
+        "usage": "Formal presentations, speeches",
+        "politeness_level": "formal"
+      }}
+    ],
+    "Declarative Past": [
+      {{
+        "form_name": "Past Casual",
+        "conjugated": "했어",
+        "romanization": "haesseo",
+        "explanation": "Casual past tense", 
+        "usage": "Did (casual)",
+        "politeness_level": "casual"
+      }},
+      {{
+        "form_name": "Past Polite",
+        "conjugated": "했어요", 
+        "romanization": "haesseoyo",
+        "explanation": "Polite past tense",
+        "usage": "Did (polite)",
+        "politeness_level": "polite"
+      }}
+    ],
+    "Interrogative": [
+      {{
+        "form_name": "Question Casual",
+        "conjugated": "해?",
+        "romanization": "hae?",
+        "explanation": "Casual question form",
+        "usage": "Do you...? (casual)",
+        "politeness_level": "casual"
+      }},
+      {{
+        "form_name": "Question Polite", 
+        "conjugated": "해요?",
+        "romanization": "haeyo?",
+        "explanation": "Polite question form",
+        "usage": "Do you...? (polite)",
+        "politeness_level": "polite"
+      }}
+    ],
+    "Connective Forms": [
+      {{
+        "form_name": "And/But Form",
+        "conjugated": "하고",
+        "romanization": "hago", 
+        "explanation": "Connecting form",
+        "usage": "Do and...",
+        "politeness_level": "neutral"
+      }},
+      {{
+        "form_name": "After Form",
+        "conjugated": "한 후에",
+        "romanization": "han hue", 
+        "explanation": "After doing",
+        "usage": "After doing something",
+        "politeness_level": "neutral"
+      }}
+    ],
+    "Conditional": [
+      {{
+        "form_name": "If Form",
+        "conjugated": "하면",
+        "romanization": "hamyeon",
+        "explanation": "If/when conditional", 
+        "usage": "If you do",
+        "politeness_level": "neutral"
+      }}
+    ]
+  }}
+}}
+
+Handle these input types:
+- Dictionary form verbs/adjectives: Provide full conjugation
+- Already conjugated forms: Identify base form and show it's a conjugation 
+- Invalid/unclear input: Return found: false with error
+
+Categories to include:
+- Declarative Present (informal low/high, formal low/high)
+- Declarative Past (casual, polite, formal)
+- Interrogative (question forms at different politeness levels)
+- Imperative (command forms)
+- Connective Forms (connecting particles and forms)
+- Conditional (if/when forms) 
+- Negative forms
+- Ability/Potential forms
+
+For adjectives, adapt the categories appropriately.
+"""
+}
