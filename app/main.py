@@ -509,98 +509,129 @@ async def voice_chat(
     uid: str = Form(...),
     voiceMode: str = Form(...),
     convSubMode: str|None = Form(None),
-    language: str = Form("japanese"),  # NEW
+    language: str = Form("japanese"),
     freeSlot: Optional[str] = Form(None),
     audio: UploadFile = File(...)
 ):
     print(f"🔨 Voice request - UID: {uid}, Mode: {voiceMode}, Language: {language}")
     
-    # Whisper transcription with language detection
+    # Read and validate audio
     audio_bytes = await audio.read()
+    print(f"🎤 Received audio: {len(audio_bytes)} bytes")
     
-    # Use language-specific whisper if available
-    whisper_language = "ko" if language == "korean" else "ja"
-    
-    txt = await client.audio.transcriptions.create(
-        model="whisper-1",
-        file=("speech.wav", audio_bytes, "audio/wav"),
-        response_format="text",
-        language=whisper_language  # NEW: specify language for better accuracy
-    )
-    transcript = txt.strip()
-    
-    print(f"🎤 Transcript: '{transcript}'")
-    
-    # Auto-detect language from transcript if not specified
-    if language == "japanese":
-        detected_lang = _detect_language(transcript)
-        if detected_lang == "korean":
-            language = "korean"
-    
-    # Check if this is a new session
-    history = get_history(uid, f"voice_{language}")
-    is_new_session = len(history) == 0
-    
-    # Generate title for new sessions
-    chat_title = None
-    if is_new_session:
-        chat_title = await _generate_chat_title(transcript)
-
-    # Route based on voice mode with language support
-    if voiceMode == "conversation":
-        sub = convSubMode if convSubMode in ("convCasual","convFormal") else "convCasual"
-        r = await _conversation_reply(uid, f"{language}_{sub}" if language == "korean" else sub, transcript)
+    if len(audio_bytes) < 8192:
         return VoiceResp(
-            transcript=transcript,
-            jp=r["reply"], 
-            en="",
+            transcript="",
+            jp="音声が短すぎます。もう少し長く話してください。",
+            en="Audio too short. Please speak longer.",
             correction="",
-            answer=r["reply"],
-            chatTitle=chat_title
+            chatTitle=None
         )
-
-    if voiceMode == "mentor":
-        r = await _mentor_reply(uid, transcript, language, free_slot_iso=freeSlot)
+    
+    try:
+        # Whisper transcription
+        whisper_language = "ko" if language == "korean" else "ja"
+        
+        txt = await client.audio.transcriptions.create(
+            model="whisper-1",
+            file=("speech.wav", audio_bytes, "audio/wav"),
+            response_format="text",
+            language=whisper_language
+        )
+        transcript = txt.strip()
+        print(f"🎤 Transcript: '{transcript}'")
+        
+        # Validate transcript length
+        if len(transcript.strip()) < 2:
+            return VoiceResp(
+                transcript=transcript,
+                jp="もう一度、はっきり話してください。",
+                en="Please speak more clearly.",
+                correction="",
+                chatTitle=None
+            )
+        
+        # Auto-detect language if needed
+        if language == "japanese":
+            detected_lang = _detect_language(transcript)
+            if detected_lang == "korean":
+                language = "korean"
+                print(f"🔄 Auto-detected Korean")
+        
+        # Session management
+        history = get_history(uid, f"voice_{language}")
+        is_new_session = len(history) == 0
+        
+        chat_title = None
+        if is_new_session:
+            chat_title = await _generate_chat_title(transcript)
+        
+        # Route to appropriate handler
+        if voiceMode == "conversation":
+            sub = convSubMode if convSubMode in ("convCasual","convFormal") else "convCasual"
+            r = await _conversation_reply(uid, f"{language}_{sub}" if language == "korean" else sub, transcript)
+            return VoiceResp(
+                transcript=transcript,
+                jp=r["reply"],
+                en="",
+                correction="",
+                answer=r["reply"],
+                chatTitle=chat_title
+            )
+        
+        elif voiceMode == "mentor":
+            r = await _mentor_reply(uid, transcript, language, free_slot_iso=freeSlot)
+            return VoiceResp(
+                transcript=transcript,
+                jp=r["answer"],
+                en="",
+                correction="",
+                answer=r["answer"],
+                recommendation=r.get("recommendation",""),
+                chatTitle=chat_title
+            )
+        
+        else:  # Default voice mode
+            r = await _voice_reply(uid, transcript, language)
+            
+            # Generate TTS
+            speech = await client.audio.speech.create(
+                model="tts-1",
+                voice="alloy",
+                input=r["jp"]
+            )
+            mp3_bytes = b"".join([c async for c in (await speech.aiter_bytes())])
+            
+            # Save TTS file
+            tts_dir = static_root / "tts"
+            tts_dir.mkdir(parents=True, exist_ok=True)
+            fname = f"{uuid.uuid4()}.mp3"
+            fpath = tts_dir / fname
+            fpath.write_bytes(mp3_bytes)
+            tts_url = f"/static/tts/{fname}"
+            
+            print(f"✅ Voice response generated with title: '{chat_title}'")
+            
+            return VoiceResp(
+                transcript=transcript,
+                jp=r["jp"],
+                en=r["en"],
+                correction=r.get("correction", ""),
+                ttsUrl=tts_url,
+                chatTitle=chat_title
+            )
+    
+    except Exception as e:
+        print(f"❌ Voice processing error: {e}")
+        error_msg = "申し訳ありません。もう一度お試しください。" if language == "japanese" else "죄송합니다. 다시 시도해 주세요."
+        
         return VoiceResp(
-            transcript=transcript,
-            jp=r["answer"], 
-            en="",
+            transcript="",
+            jp=error_msg,
+            en="Sorry, please try again.",
             correction="",
-            answer=r["answer"],
-            recommendation=r.get("recommendation",""),
-            chatTitle=chat_title
+            chatTitle=None
         )
-
-    # Default voice mode with language support
-    r = await _voice_reply(uid, transcript, language)
-
-    # Neural TTS generation with Korean support
-    tts_voice = "alloy"  # OpenAI TTS supports multiple languages with same voice
-    speech = await client.audio.speech.create(
-        model="tts-1",
-        voice=tts_voice,
-        input=r["jp"]  # This field name stays the same for compatibility
-    )
-    mp3_bytes = b"".join([c async for c in (await speech.aiter_bytes())])
-
-    # Save TTS file
-    tts_dir = static_root / "tts"
-    tts_dir.mkdir(parents=True, exist_ok=True)
-    fname = f"{uuid.uuid4()}.mp3"
-    fpath = tts_dir / fname
-    fpath.write_bytes(mp3_bytes)
-    tts_url = f"/static/tts/{fname}"
-
-    print(f"✅ Voice response generated with title: '{chat_title}'")
-
-    return VoiceResp(
-        transcript=transcript,
-        jp=r["jp"],  # Contains Korean text when language is Korean
-        en=r["en"],
-        correction=r.get("correction", ""),
-        ttsUrl=tts_url,
-        chatTitle=chat_title
-    )
 
 async def _conversation_reply(uid: str, mode: str, user_msg: str, user_name: str = "Friend") -> Dict:
     history = get_history(uid, mode)  # Mode now includes language
