@@ -11,7 +11,7 @@ const LOG_URL = "https://script.google.com/macros/s/AKfycbxBZ1hcCm2q5G7AdsrwErQe
 /** Enhanced logging - compatible with existing Google Sheets format */
 async function logTurn(mode, subMode, uid, payload) {
   const logData = {
-    sheet: mode,               // conversation | mentor | voice | dictionary | sentence_analysis
+    sheet: mode,               // conversation | mentor | voice | dictionary | sentence_analysis | conjugation
     uid,
     sub: subMode || '',        // casual / formal or ''
     payload: payload           // Keep original payload structure
@@ -79,22 +79,19 @@ function exportLogsToCSV() {
   logs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   
   // Create CSV content matching your Google Sheets format
-  const headers = ['Timestamp', 'UID', 'SubMode', 'Wrong', 'Fix', 'Reply', 'Explanation', 'User Input', 'Language', 'Mode'];
+  const headers = ['Timestamp', 'UID', 'Mode', 'SubMode', 'User Input', 'AI Response', 'Language', 'Metadata'];
   const csvContent = [
     headers.join(','),
     ...logs.map(log => {
-      const metadata = JSON.parse(log.metadata || '{}');
       return [
         log.timestamp,
         log.uid,
+        log.mode,
         log.subMode,
-        `"${(metadata.wrong || '').replace(/"/g, '""')}"`,
-        `"${(metadata.fix || '').replace(/"/g, '""')}"`,
-        `"${(log.aiResponse || '').replace(/"/g, '""')}"`,
-        `"${(metadata.explanation || '').replace(/"/g, '""')}"`,
         `"${(log.userInput || '').replace(/"/g, '""')}"`,
+        `"${(log.aiResponse || '').replace(/"/g, '""')}"`,
         log.language,
-        log.mode
+        `"${(log.metadata || '').replace(/"/g, '""')}"`,
       ].join(',');
     })
   ].join('\n');
@@ -276,7 +273,7 @@ function DictionaryResult({ result }) {
   );
 }
 
-/* === Sentence Analysis Result Component === */
+/* === Enhanced Sentence Analysis Result Component === */
 function SentenceAnalysisResult({ result }) {
   if (!result.found) {
     return (
@@ -372,6 +369,121 @@ function SentenceAnalysisResult({ result }) {
             </div>
           </div>
         )}
+
+        {/* Word Analysis */}
+        {result.wordAnalysis && result.wordAnalysis.length > 0 && (
+          <div>
+            <strong className="text-sm">Word-by-word Analysis:</strong>
+            <div className="mt-1 space-y-1">
+              {result.wordAnalysis.map((word, i) => (
+                <div key={i} className={`text-xs p-2 rounded ${word.isCorrect ? 'bg-green-50' : 'bg-red-50'}`}>
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium">{word.word}</span>
+                    <span className={word.isCorrect ? 'text-green-600' : 'text-red-600'}>
+                      {word.isCorrect ? '✓' : '✗'}
+                    </span>
+                  </div>
+                  {word.reading && (
+                    <div className="text-gray-500">{word.reading}</div>
+                  )}
+                  <div className="text-gray-600">{word.partOfSpeech} - {word.meaning}</div>
+                  {word.usage && (
+                    <div className="text-gray-700 italic">{word.usage}</div>
+                  )}
+                  {word.correction && (
+                    <div className="text-green-700">→ {word.correction}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* === NEW: Conjugation Result Component === */
+function ConjugationResult({ result }) {
+  if (!result.found) {
+    return (
+      <div className="bg-red-50 border border-red-200 p-3 rounded mt-2">
+        <div className="text-red-800 font-medium">Conjugation Analysis Failed</div>
+        <div className="text-red-600 text-sm">{result.error}</div>
+      </div>
+    );
+  }
+
+  const { verbInfo, conjugations } = result;
+
+  return (
+    <div className="bg-purple-50 border border-purple-200 p-4 rounded mt-2">
+      {/* Verb Info Header */}
+      <div className="mb-4 bg-white p-3 rounded">
+        <div className="text-lg font-bold">{verbInfo.baseForm}</div>
+        {verbInfo.reading && (
+          <div className="text-gray-600">({verbInfo.reading})</div>
+        )}
+        {verbInfo.romanization && (
+          <div className="text-gray-600">{verbInfo.romanization}</div>
+        )}
+        <div className="text-sm text-gray-700 mt-1">{verbInfo.meaning}</div>
+        
+        <div className="flex gap-2 mt-2">
+          <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded">
+            {verbInfo.verbType}
+          </span>
+          {verbInfo.conjugationGroup && (
+            <span className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded">
+              {verbInfo.conjugationGroup}
+            </span>
+          )}
+          {verbInfo.isConjugated && (
+            <span className="px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded">
+              Conjugated Form
+            </span>
+          )}
+        </div>
+
+        {verbInfo.isConjugated && (
+          <div className="mt-2 text-sm">
+            <div><strong>Your input:</strong> {verbInfo.originalInput}</div>
+            <div><strong>Input meaning:</strong> {verbInfo.originalInput === verbInfo.baseForm ? verbInfo.meaning : verbInfo.originalMeaning || verbInfo.meaning}</div>
+          </div>
+        )}
+      </div>
+
+      {/* Conjugation Categories */}
+      <div className="space-y-4">
+        {Object.entries(conjugations).map(([category, forms]) => (
+          <div key={category} className="bg-white p-3 rounded">
+            <h3 className="font-semibold text-purple-800 mb-2">{category}</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {forms.map((form, i) => (
+                <div key={i} className="border border-gray-200 p-2 rounded text-sm">
+                  <div className="font-medium text-purple-700">{form.formName}</div>
+                  <div className="text-lg">{form.conjugated}</div>
+                  {(form.reading || form.romanization) && (
+                    <div className="text-gray-500 text-xs">
+                      {form.reading || form.romanization}
+                    </div>
+                  )}
+                  {form.explanation && (
+                    <div className="text-gray-600 text-xs mt-1">{form.explanation}</div>
+                  )}
+                  {form.usage && (
+                    <div className="text-gray-500 text-xs italic">{form.usage}</div>
+                  )}
+                  {form.politenessLevel && (
+                    <span className="inline-block mt-1 px-1 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">
+                      {form.politenessLevel}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -384,6 +496,7 @@ export default function App() {
   const [convType, setConvType] = useState('convCasual'); // convCasual / convFormal
   const [language, setLanguage] = useState('japanese');   // japanese / korean
   const [input, setInput] = useState('');
+  const [intendedMeaning, setIntendedMeaning] = useState(''); // NEW: for enhanced sentence analysis
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState([]);
@@ -420,14 +533,16 @@ export default function App() {
         ? 'Dictionary Lookup'
         : val === 'sentence_analysis'
         ? 'Sentence Analysis'
+        : val === 'conjugation'
+        ? 'Conjugation Analysis'
         : val.charAt(0).toUpperCase() + val.slice(1);
-    pushMsg('system', `――― Switched to ${label} Mode (${language}) ―――`);
-    setFile(null); setRecordedWav(null); setIsRecording(false);
+    pushMsg('system', `——— Switched to ${label} Mode (${language}) ———`);
+    setFile(null); setRecordedWav(null); setIsRecording(false); setIntendedMeaning('');
   };
 
   const handleLanguageChange = val => {
     setLanguage(val);
-    pushMsg('system', `――― Language changed to ${val.charAt(0).toUpperCase() + val.slice(1)} ―――`);
+    pushMsg('system', `——— Language changed to ${val.charAt(0).toUpperCase() + val.slice(1)} ———`);
   };
 
   /* ========= Submit ========= */
@@ -493,13 +608,46 @@ export default function App() {
         );
       }
 
-      /* === Sentence Analysis === */
+      /* === NEW: Conjugation Analysis === */
+      else if (mode === 'conjugation') {
+        const { data } = await axios.post(`${API_BASE}/conjugation`, {
+          uid: TEST_UID,
+          word: input,
+          language: language
+        });
+
+        pushMsg(
+          'assistant',
+          <ConjugationResult result={data} />
+        );
+
+        await logTurn(
+          'conjugation',
+          language,
+          TEST_UID,
+          { word: input, result: data, language, userInput: input }
+        );
+      }
+
+      /* === Enhanced Sentence Analysis === */
       else if (mode === 'sentence_analysis') {
-        const { data } = await axios.post(`${API_BASE}/sentence_analysis`, {
+        const endpoint = intendedMeaning.trim() 
+          ? '/sentence_analysis_enhanced'  // Use enhanced version if intended meaning provided
+          : '/sentence_analysis';
+
+        const requestBody = {
           uid: TEST_UID,
           sentence: input,
           language: language
-        });
+        };
+
+        // Add intended meaning for enhanced analysis
+        if (intendedMeaning.trim()) {
+          requestBody.intended_english_meaning = intendedMeaning.trim();
+          requestBody.analysis_type = 'enhanced_with_context';
+        }
+
+        const { data } = await axios.post(`${API_BASE}${endpoint}`, requestBody);
 
         pushMsg(
           'assistant',
@@ -508,9 +656,15 @@ export default function App() {
 
         await logTurn(
           'sentence_analysis',
-          language,
+          `${language}${intendedMeaning.trim() ? '_enhanced' : ''}`,
           TEST_UID,
-          { sentence: input, result: data, language, userInput: input }
+          { 
+            sentence: input, 
+            intended_meaning: intendedMeaning.trim() || undefined,
+            result: data, 
+            language, 
+            userInput: input 
+          }
         );
       }
 
@@ -572,10 +726,11 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
-      alert(err.message || err);
+      pushMsg('assistant', `❌ Error: ${err.response?.data?.detail || err.message || err}`);
     } finally {
       setLoading(false);
       setInput('');
+      setIntendedMeaning('');
     }
   }
 
@@ -706,8 +861,9 @@ export default function App() {
             <option value="conversation">💬 Conversation</option>
             <option value="mentor">🎓 Mentor</option>
             <option value="voice">🎤 Voice</option>
-            <option value="dictionary">🔍 Dictionary</option>
-            <option value="sentence_analysis">📝 Sentence Analysis</option>
+            <option value="dictionary">📚 Dictionary</option>
+            <option value="sentence_analysis">🔍 Sentence Analysis</option>
+            <option value="conjugation">🔄 Conjugation</option>
           </select>
 
           {mode === 'conversation' && (
@@ -730,6 +886,25 @@ export default function App() {
             <option value="korean">🇰🇷 Korean</option>
           </select>
         </div>
+
+        {/* Enhanced input area for sentence analysis */}
+        {mode === 'sentence_analysis' && (
+          <div className="bg-blue-50 p-3 rounded border">
+            <div className="text-sm font-medium text-blue-800 mb-2">
+              Enhanced Analysis (Optional)
+            </div>
+            <textarea
+              rows={2}
+              value={intendedMeaning}
+              onChange={e => setIntendedMeaning(e.target.value)}
+              className="w-full p-2 border rounded text-sm"
+              placeholder="What did you intend to say in English? (This helps provide better corrections)"
+            />
+            <div className="text-xs text-blue-600 mt-1">
+              💡 Providing your intended meaning enables enhanced contextual analysis
+            </div>
+          </div>
+        )}
 
         {/* input area */}
         {mode === 'voice' ? (
@@ -788,6 +963,8 @@ export default function App() {
                 ? (language === 'korean' ? "단어를 입력하세요..." : "単語を入力してください...")
                 : mode === 'sentence_analysis'
                 ? (language === 'korean' ? "분석할 문장을 입력하세요..." : "分析する文章を入力してください...")
+                : mode === 'conjugation'
+                ? (language === 'korean' ? "활용할 동사/형용사를 입력하세요..." : "活用する動詞・形容詞を入力してください...")
                 : language === 'korean' 
                 ? "메시지를 입력하세요..." 
                 : "Type a message…"
@@ -803,6 +980,7 @@ export default function App() {
           {loading ? (language === 'korean' ? '처리 중...' : 'Processing…') : 
            mode === 'dictionary' ? (language === 'korean' ? '검색' : 'Look up') :
            mode === 'sentence_analysis' ? (language === 'korean' ? '분석' : 'Analyze') :
+           mode === 'conjugation' ? (language === 'korean' ? '활용 분석' : 'Conjugate') :
            (language === 'korean' ? '전송' : 'Send')}
         </button>
       </footer>
