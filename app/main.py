@@ -996,10 +996,6 @@ async def analyze_sentence(body: SentenceAnalysisRequest):
 # 5. Sentence Analysis endpoint
 # ===============================================================
 
-class SentenceAnalysisRequest(BaseModel):
-    uid: str
-    sentence: str
-    language: Literal["japanese", "korean"] = "japanese"
 
 class GrammarBreakdown(BaseModel):
     grammar: int        # 0-100
@@ -1218,6 +1214,208 @@ async def clear_sentence_analysis_cache():
     _sentence_analysis_cache.clear()
     return {"message": f"Cleared {cache_size} cached sentence analysis entries"}
 
+class EnhancedSentenceAnalysisRequest(BaseModel):
+    uid: str
+    sentence: str
+    intended_english_meaning: str
+    language: Literal["japanese", "korean"] = "japanese"
+    analysis_type: str = "enhanced_with_context"
+
+@app.post("/sentence_analysis_enhanced", response_model=SentenceAnalysisResponse)
+async def analyze_sentence_enhanced(body: EnhancedSentenceAnalysisRequest):
+    uid = body.uid
+    sentence = body.sentence.strip()
+    intended_meaning = body.intended_english_meaning.strip()
+    language = body.language
+    
+    # Input validation
+    if not sentence:
+        return SentenceAnalysisResponse(
+            originalSentence="",
+            correctnessScore=0,
+            grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+            userTranslation="",
+            correctedSentence="",
+            correctedTranslation="",
+            improvements=[],
+            wordAnalysis=[],
+            found=False,
+            error="Empty sentence"
+        )
+    
+    if not intended_meaning:
+        return SentenceAnalysisResponse(
+            originalSentence=sentence,
+            correctnessScore=0,
+            grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+            userTranslation="",
+            correctedSentence="",
+            correctedTranslation="",
+            improvements=[],
+            wordAnalysis=[],
+            found=False,
+            error="Empty intended meaning"
+        )
+    
+    # Character limits
+    if len(sentence) > 500:
+        return SentenceAnalysisResponse(
+            originalSentence=sentence,
+            correctnessScore=0,
+            grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+            userTranslation="",
+            correctedSentence="",
+            correctedTranslation="",
+            improvements=[],
+            wordAnalysis=[],
+            found=False,
+            error="Sentence too long. Maximum 500 characters allowed."
+        )
+    
+    if len(intended_meaning) > 200:
+        return SentenceAnalysisResponse(
+            originalSentence=sentence,
+            correctnessScore=0,
+            grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+            userTranslation="",
+            correctedSentence="",
+            correctedTranslation="",
+            improvements=[],
+            wordAnalysis=[],
+            found=False,
+            error="Intended meaning too long. Maximum 200 characters allowed."
+        )
+    
+    print(f"🔍 Enhanced sentence analysis - UID: {uid}, Language: {language}")
+    print(f"   Sentence: '{sentence}'")
+    print(f"   Intended: '{intended_meaning}'")
+    
+    try:
+        # Create enhanced prompt with user's intended meaning
+        base_prompt_template = SENTENCE_ANALYSIS_PROMPTS.get(language, SENTENCE_ANALYSIS_PROMPTS["japanese"])
+        
+        # Enhanced prompt that includes user's intended English meaning
+        enhanced_prompt = f"""
+{base_prompt_template}
+
+ADDITIONAL CONTEXT:
+The user has clarified that they intended to express: "{intended_meaning}"
+
+Please analyze their sentence "{sentence}" with this context in mind:
+1. Compare what they actually wrote vs. what they intended to say
+2. Focus on how to help them express their intended meaning correctly
+3. Provide specific guidance on how to say "{intended_meaning}" properly in {language}
+4. In your analysis, acknowledge their intended meaning and show the gap between intention and execution
+
+Your corrected_sentence should express: "{intended_meaning}"
+Your corrected_meaning should be: "{intended_meaning}" (or very close to it)
+"""
+        
+        response = await client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a language analysis API with access to user intent. Respond with valid JSON only."
+                },
+                {
+                    "role": "user", 
+                    "content": enhanced_prompt.format(sentence=sentence)
+                }
+            ],
+            temperature=0.1,
+            max_tokens=2000,
+            response_format={"type": "json_object"}
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        
+        # Clean any potential markdown formatting
+        if result_text.startswith('```json'):
+            result_text = result_text[7:]
+        if result_text.endswith('```'):
+            result_text = result_text[:-3]
+        result_text = result_text.strip()
+        
+        try:
+            result_data = json.loads(result_text)
+            
+            # Transform the data to match our response model
+            transformed_data = {
+                "originalSentence": sentence,
+                "correctnessScore": result_data.get("correctness_score", 0),
+                "grammarBreakdown": {
+                    "grammar": result_data.get("grammar_score", 0),
+                    "particles": result_data.get("particle_score", 0),
+                    "wordUsage": result_data.get("word_usage_score", 0),
+                    "spelling": result_data.get("spelling_score", 0),
+                    "kanjiUsage": result_data.get("kanji_usage_score") if language == "japanese" else None,
+                    "honorifics": result_data.get("honorifics_score") if language == "korean" else None
+                },
+                "userTranslation": f"You intended: '{intended_meaning}' but your sentence suggests: '{result_data.get('user_meaning', '')}'",
+                "correctedSentence": result_data.get("corrected_sentence", ""),
+                "correctedTranslation": intended_meaning,  # Should match user's intended meaning
+                "improvements": [
+                    {
+                        "type": imp.get("type", "general"),
+                        "explanation": imp.get("explanation", ""),
+                        "original": imp.get("original", ""),
+                        "corrected": imp.get("corrected", "")
+                    }
+                    for imp in result_data.get("improvements", [])
+                ],
+                "wordAnalysis": [
+                    {
+                        "word": word.get("word", ""),
+                        "reading": word.get("reading"),
+                        "partOfSpeech": word.get("part_of_speech", ""),
+                        "meaning": word.get("meaning", ""),
+                        "usage": word.get("usage_note", ""),
+                        "isCorrect": word.get("is_correct", True),
+                        "correction": word.get("correction"),
+                        "position": word.get("position", 0)
+                    }
+                    for word in result_data.get("word_analysis", [])
+                ],
+                "found": True
+            }
+            
+            print(f"✅ Enhanced analysis successful: {transformed_data['correctnessScore']}% correct")
+            print(f"   Intended vs actual meaning alignment improved")
+            
+            return SentenceAnalysisResponse(**transformed_data)
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON parsing failed: {e}")
+            print(f"Raw response: {result_text[:200]}...")
+            
+            return SentenceAnalysisResponse(
+                originalSentence=sentence,
+                correctnessScore=0,
+                grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+                userTranslation=f"Intended: '{intended_meaning}' (analysis failed)",
+                correctedSentence="",
+                correctedTranslation="",
+                improvements=[],
+                wordAnalysis=[],
+                found=False,
+                error="Failed to parse enhanced analysis response"
+            )
+    
+    except Exception as e:
+        print(f"❌ Enhanced sentence analysis failed: {e}")
+        return SentenceAnalysisResponse(
+            originalSentence=sentence,
+            correctnessScore=0,
+            grammarBreakdown=GrammarBreakdown(grammar=0, particles=0, wordUsage=0, spelling=0),
+            userTranslation=f"Intended: '{intended_meaning}' (service error)",
+            correctedSentence="",
+            correctedTranslation="",
+            improvements=[],
+            wordAnalysis=[],
+            found=False,
+            error=f"Enhanced analysis service error: {str(e)}"
+        )
 
 # ===============================================================
 # 6. Conjugation Analysis endpoint

@@ -458,74 +458,130 @@ PROMPTS.update({
 
 # Replace the SENTENCE_ANALYSIS_PROMPTS in your prompts.py with this:
 
+
 SENTENCE_ANALYSIS_PROMPTS = {
     "japanese": """
-You are an expert Japanese language teacher. Analyze this sentence for grammatical correctness and provide detailed feedback.
+You are an expert Japanese language teacher. Analyze this sentence for grammatical correctness with STRICT CONTEXTUAL AWARENESS.
 
 Sentence to analyze: "{sentence}"
 
-Analyze the sentence and provide:
-1. Overall correctness score (0-100)
-2. Individual component scores
-3. Word-by-word analysis with part of speech and corrections
-4. Translation of what the user actually wrote
-5. Corrected version of the sentence
-6. Translation of the corrected sentence
-7. Specific improvements needed
+CRITICAL ANALYSIS RULES:
+1. PRESERVE USER'S INTENDED TONE: If user uses casual speech, correct to casual. If polite, correct to polite. NEVER change formality level unless grammatically wrong.
+2. ASSUME SPEAKER IS TALKING ABOUT THEMSELVES unless context clearly indicates otherwise
+3. ANALYZE CONTEXT AND LOGIC: Consider what the speaker likely means, not just grammar
+4. PARTICLE PRECISION: 
+   - へ (he) = specific direction/destination you can see
+   - に (ni) = general direction, events, locations, time
+   - を (wo) = direct object only
+   - は (wa) = topic marker, contrast
+   - が (ga) = subject marker, new information
+5. VERB CHOICE MATTERS: Consider logical meaning (can't go vs must go, etc.)
+6. SPELLING vs GRAMMAR: Distinguish between typos and actual grammar errors
 
-Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
+EXAMPLES OF CORRECT ANALYSIS:
+- "宿題があるから、パーティーに行けない" (can't go to party due to homework) NOT "行かなきゃ" (must go)
+- Casual speech stays casual: "食べる" NOT "食べます" unless user mixed formality
+- "友達に会いに行く" (going to meet friend) uses に, not へ
+
+Return ONLY valid JSON with this exact structure:
 
 {{
-  "correctness_score": 75,
-  "grammar_score": 80,
-  "particle_score": 70,
-  "word_usage_score": 85,
-  "spelling_score": 90,
-  "kanji_usage_score": 75,
+  "correctness_score": 45,
+  "grammar_score": 40,
+  "particle_score": 30,
+  "word_usage_score": 60,
+  "spelling_score": 80,
+  "kanji_usage_score": 70,
   "word_analysis": [
     {{
-      "word": "友達",
-      "reading": "ともだち", 
-      "part_of_speech": "名詞",
-      "meaning": "friend",
+      "word": "たくさん",
+      "reading": "たくさん", 
+      "part_of_speech": "副詞",
+      "meaning": "a lot, many",
       "usage_note": "Correct usage",
       "is_correct": true,
       "position": 0
     }},
     {{
-      "word": "を",
-      "reading": "を",
-      "part_of_speech": "助詞", 
-      "meaning": "object particle",
-      "usage_note": "Wrong particle - should be topic marker",
-      "is_correct": false,
-      "correction": "は",
+      "word": "宿題",
+      "reading": "しゅくだい",
+      "part_of_speech": "名詞", 
+      "meaning": "homework",
+      "usage_note": "Correct word choice",
+      "is_correct": true,
       "position": 1
     }},
     {{
-      "word": "いない",
-      "reading": "いない",
-      "part_of_speech": "動詞",
-      "meaning": "not exist/not have",
-      "usage_note": "Correct usage",
-      "is_correct": true,
+      "word": "は",
+      "reading": "は",
+      "part_of_speech": "助詞", 
+      "meaning": "topic particle",
+      "usage_note": "Wrong particle - homework exists, not a topic. Should use が for existence",
+      "is_correct": false,
+      "correction": "が",
       "position": 2
+    }},
+    {{
+      "word": "いる",
+      "reading": "いる",
+      "part_of_speech": "動詞",
+      "meaning": "to exist (animate)",
+      "usage_note": "Wrong verb - homework is inanimate, should use ある",
+      "is_correct": false,
+      "correction": "ある",
+      "position": 3
+    }},
+    {{
+      "word": "パティー",
+      "reading": "パティー",
+      "part_of_speech": "名詞",
+      "meaning": "party",
+      "usage_note": "Spelling error - should be パーティー",
+      "is_correct": false,
+      "correction": "パーティー",
+      "position": 4
+    }},
+    {{
+      "word": "へ",
+      "reading": "へ",
+      "part_of_speech": "助詞",
+      "meaning": "direction particle",
+      "usage_note": "Wrong particle - use に for events/locations, へ for visible directions",
+      "is_correct": false,
+      "correction": "に",
+      "position": 5
+    }},
+    {{
+      "word": "行かなきゃ",
+      "reading": "いかなきゃ",
+      "part_of_speech": "動詞",
+      "meaning": "must go",
+      "usage_note": "Logical error - with lots of homework, speaker likely CAN'T go to party",
+      "is_correct": false,
+      "correction": "行けない",
+      "position": 6
     }}
   ],
-  "user_meaning": "Friends (object) don't exist",
-  "corrected_sentence": "友達はいない",
-  "corrected_meaning": "I don't have friends",
+  "user_meaning": "I have a friend named Miyako (using improper hiragana and wrong existence verb)",
+  "corrected_sentence": "みやこという友達がいます",
+  "corrected_meaning": "I have a friend named Miyako",
   "improvements": [
     {{
-      "type": "particle",
-      "explanation": "Use は (wa) as topic particle instead of を (wo) object particle",
-      "original": "を",
-      "corrected": "は"
+      "type": "kanji_usage",
+      "explanation": "Use kanji 友達 instead of hiragana ともだち - common words should use proper kanji",
+      "original": "ともだち",
+      "corrected": "友達"
+    }},
+    {{
+      "type": "verb_choice",
+      "explanation": "Use いる for animate beings (people, animals), ある for inanimate objects",
+      "original": "あります",
+      "corrected": "います"
     }}
   ]
 }}
 
-For sentences with no errors:
+For perfect sentences (rare):
 {{
   "correctness_score": 100,
   "grammar_score": 100,
@@ -533,102 +589,8 @@ For sentences with no errors:
   "word_usage_score": 100,
   "spelling_score": 100,
   "kanji_usage_score": 100,
-  "word_analysis": [...word breakdown...],
-  "user_meaning": "Perfect translation",
-  "corrected_sentence": "Same as original",
-  "corrected_meaning": "Same as user meaning", 
-  "improvements": []
-}}
-
-For unclear input:
-{{
-  "correctness_score": 0,
-  "found": false,
-  "error": "Could not understand sentence",
-  "user_meaning": "",
-  "corrected_sentence": "",
-  "corrected_meaning": "",
-  "improvements": [],
-  "word_analysis": []
-}}
-""",
-
-    "korean": """
-You are an expert Korean language teacher. Analyze this sentence for grammatical correctness and provide detailed feedback.
-
-Sentence to analyze: "{sentence}"
-
-Analyze the sentence and provide:
-1. Overall correctness score (0-100)
-2. Individual component scores including honorifics
-3. Word-by-word analysis with part of speech and corrections
-4. Translation of what the user actually wrote
-5. Corrected version of the sentence  
-6. Translation of the corrected sentence
-7. Specific improvements needed
-
-Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
-
-{{
-  "correctness_score": 80,
-  "grammar_score": 85,
-  "particle_score": 75,
-  "word_usage_score": 80,
-  "spelling_score": 90,
-  "honorifics_score": 85,
-  "word_analysis": [
-    {{
-      "word": "친구",
-      "reading": "chingu",
-      "part_of_speech": "명사",
-      "meaning": "friend",
-      "usage_note": "Correct usage",
-      "is_correct": true,
-      "position": 0
-    }},
-    {{
-      "word": "은",
-      "reading": "eun", 
-      "part_of_speech": "조사",
-      "meaning": "topic particle",
-      "usage_note": "Wrong particle after consonant",
-      "is_correct": false,
-      "correction": "가",
-      "position": 1
-    }},
-    {{
-      "word": "없어요",
-      "reading": "eopsseoyo",
-      "part_of_speech": "동사",
-      "meaning": "don't have",
-      "usage_note": "Correct polite form",
-      "is_correct": true,
-      "position": 2
-    }}
-  ],
-  "user_meaning": "As for friends, don't have them",
-  "corrected_sentence": "친구가 없어요",
-  "corrected_meaning": "I don't have friends",
-  "improvements": [
-    {{
-      "type": "particle",
-      "explanation": "Use 가 as subject particle after consonant-ending nouns instead of 은",
-      "original": "은",
-      "corrected": "가"
-    }}
-  ]
-}}
-
-For sentences with no errors:
-{{
-  "correctness_score": 100,
-  "grammar_score": 100,
-  "particle_score": 100,
-  "word_usage_score": 100,
-  "spelling_score": 100,
-  "honorifics_score": 100,
-  "word_analysis": [...word breakdown...],
-  "user_meaning": "Perfect translation",
+  "word_analysis": [...],
+  "user_meaning": "Accurate translation",
   "corrected_sentence": "Same as original",
   "corrected_meaning": "Same as user meaning",
   "improvements": []
@@ -638,7 +600,128 @@ For unclear input:
 {{
   "correctness_score": 0,
   "found": false,
-  "error": "Could not understand sentence",
+  "error": "Could not understand sentence structure",
+  "user_meaning": "",
+  "corrected_sentence": "",
+  "corrected_meaning": "",
+  "improvements": [],
+  "word_analysis": []
+}}
+""",
+
+    "korean": """
+You are an expert Korean language teacher. Analyze this sentence for grammatical correctness with STRICT CONTEXTUAL AWARENESS.
+
+Sentence to analyze: "{sentence}"
+
+CRITICAL ANALYSIS RULES:
+1. PRESERVE USER'S INTENDED FORMALITY: Recognize formality levels and maintain them
+   - 반말 (casual): 해, 가, 먹어
+   - 존댓말 (polite): 해요, 가요, 먹어요  
+   - 높임말 (formal): 하십니다, 가십니다, 드세요
+2. ASSUME SPEAKER IS TALKING ABOUT THEMSELVES unless context clearly indicates otherwise
+3. ANALYZE CONTEXT AND LOGIC: Consider what makes sense in the situation
+4. PARTICLE PRECISION:
+   - 은/는 = topic marker, contrast
+   - 이/가 = subject marker, new information
+   - 을/를 = object marker
+   - 에 = location (static), time
+   - 에서 = location (action), from
+   - 으로/로 = method, direction, transformation
+5. SPELLING vs GRAMMAR: Distinguish Korean spelling errors from grammar mistakes
+6. FORMALITY CONSISTENCY: If user attempts polite speech, correct to proper polite form
+
+EXAMPLES OF CORRECT ANALYSIS:
+- "어떻게 여기 오셨어요?" (polite) NOT "어떻게 여기 왔어?" if user attempted polite speech
+- Maintain attempted formality level unless completely wrong
+- "친구가 없어요" uses 가 (subject), not 은 (topic) for existence
+
+Return ONLY valid JSON with this exact structure:
+
+{{
+  "correctness_score": 25,
+  "grammar_score": 30,
+  "particle_score": 20,
+  "word_usage_score": 40,
+  "spelling_score": 15,
+  "honorifics_score": 20,
+  "word_analysis": [
+    {{
+      "word": "어떠케",
+      "reading": "eotteoke",
+      "part_of_speech": "부사",
+      "meaning": "how",
+      "usage_note": "Severe spelling error - should be 어떻게",
+      "is_correct": false,
+      "correction": "어떻게",
+      "position": 0
+    }},
+    {{
+      "word": "요기",
+      "reading": "yogi",
+      "part_of_speech": "명사",
+      "meaning": "here",
+      "usage_note": "Spelling error - should be 여기",
+      "is_correct": false,
+      "correction": "여기",
+      "position": 1
+    }},
+    {{
+      "word": "와쎴어",
+      "reading": "wassyeosseo",
+      "part_of_speech": "동사",
+      "meaning": "came",
+      "usage_note": "Multiple errors: spelling (와쎴어) and formality mismatch - user attempting polite speech should be 오셨어요",
+      "is_correct": false,
+      "correction": "오셨어요",
+      "position": 2
+    }}
+  ],
+  "user_meaning": "How did you come here? (attempted polite but with many errors)",
+  "corrected_sentence": "어떻게 여기 오셨어요?",
+  "corrected_meaning": "How did you come here? (proper polite form)",
+  "improvements": [
+    {{
+      "type": "spelling",
+      "explanation": "Correct spelling of 'how' in Korean",
+      "original": "어떠케",
+      "corrected": "어떻게"
+    }},
+    {{
+      "type": "spelling", 
+      "explanation": "Correct spelling of 'here' in Korean",
+      "original": "요기",
+      "corrected": "여기"
+    }},
+    {{
+      "type": "formality_grammar",
+      "explanation": "User attempted polite speech - correct polite form of 'to come' with proper honorific",
+      "original": "와쎴어",
+      "corrected": "오셨어요"
+    }}
+  ]
+}}
+
+For perfect sentences:
+{{
+  "correctness_score": 100,
+  "grammar_score": 100,
+  "particle_score": 100,
+  "word_usage_score": 100,
+  "spelling_score": 100,
+  "honorifics_score": 100,
+  "word_analysis": [...],
+  "user_meaning": "Perfect translation",
+  "corrected_sentence": "Same as original", 
+  "corrected_meaning": "Same as user meaning",
+  "improvements": []
+}}
+
+For unclear input:
+{{
+  "correctness_score": 0,
+  "found": false,
+  "error": "Could not understand sentence structure",
   "user_meaning": "",
   "corrected_sentence": "",
   "corrected_meaning": "",
@@ -647,7 +730,6 @@ For unclear input:
 }}
 """
 }
-
 
 CONJUGATION_PROMPTS = {
     "japanese": """
