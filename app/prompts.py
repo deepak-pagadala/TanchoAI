@@ -750,10 +750,12 @@ CRITICAL: Return ONLY valid JSON with this exact structure:
     "base_form": "する",
     "reading": "する", 
     "meaning": "to do",
+    "base_form_meaning": "to do (dictionary form)",
     "verb_type": "irregular verb",
     "conjugation_group": "irregular",
     "is_conjugated": false,
-    "original_input": "{word}"
+    "original_input": "{word}",
+    "original_meaning": "to do"
   }},
   "conjugations": {{
     "Present": [
@@ -841,15 +843,23 @@ CRITICAL: Return ONLY valid JSON with this exact structure:
   }}
 }}
 
-Handle these input types:
-- Dictionary form verbs/adjectives: Provide full conjugation
-- Already conjugated forms: Identify base form and show it's a conjugation of that base
-- Invalid/unclear input: Return found: false with error
+IMPORTANT INSTRUCTIONS:
+- If the input is a conjugated form (like 食べています), set is_conjugated: true
+- original_meaning should describe what the USER'S INPUT means (e.g., "eating right now" for 食べています)
+- base_form_meaning should describe what the BASE FORM means (e.g., "to eat" for 食べる)
+- meaning field should match original_meaning for consistency
 
 For conjugated inputs like "させる" (causative of する), show:
 - base_form: "する"  
 - is_conjugated: true
+- original_meaning: "to make/let someone do"
+- base_form_meaning: "to do"
 - Include the causative form in the conjugations
+
+Handle these input types:
+- Dictionary form verbs/adjectives: Provide full conjugation
+- Already conjugated forms: Identify base form and show it's a conjugation of that base
+- Invalid/unclear input: Return found: false with error
 
 Categories to include:
 - Present (casual, polite)
@@ -884,10 +894,12 @@ CRITICAL: Return ONLY valid JSON with this exact structure:
     "base_form": "하다",
     "romanization": "hada",
     "meaning": "to do", 
+    "base_form_meaning": "to do (dictionary form)",
     "verb_type": "regular verb",
     "conjugation_group": "하다 verb",
     "is_conjugated": false,
-    "original_input": "{word}"
+    "original_input": "{word}",
+    "original_meaning": "to do"
   }},
   "conjugations": {{
     "Declarative Present": [
@@ -990,6 +1002,12 @@ CRITICAL: Return ONLY valid JSON with this exact structure:
     ]
   }}
 }}
+
+IMPORTANT INSTRUCTIONS:
+- If the input is a conjugated form (like 했어요), set is_conjugated: true
+- original_meaning should describe what the USER'S INPUT means (e.g., "did (polite)" for 했어요)
+- base_form_meaning should describe what the BASE FORM means (e.g., "to do" for 하다)
+- meaning field should match original_meaning for consistency
 
 Handle these input types:
 - Dictionary form verbs/adjectives: Provide full conjugation
