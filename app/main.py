@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 import pathlib
-from typing import Literal, List, Dict, Optional
+from typing import Literal, List, Dict, Optional, Tuple
 import os, sys, json
 import uuid
+import random
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -1640,3 +1641,386 @@ async def clear_conjugation_cache():
     cache_size = len(_conjugation_cache)
     _conjugation_cache.clear()
     return {"message": f"Cleared {cache_size} cached conjugation entries"}
+
+# ===============================================================
+# 7. Crossword
+# ===============================================================
+
+
+# Add these models after your existing models
+class CrosswordWord(BaseModel):
+    word: str
+    clue_original: str  # Japanese/Korean
+    clue_english: str
+    hints: List[str]    # 2 hints in English
+    difficulty: str     # N5, N4, etc or TOPIK 1-6
+    start_row: int
+    start_col: int
+    direction: str      # "across" or "down"
+    number: int
+
+class CrosswordPuzzle(BaseModel):
+    id: str
+    date: str
+    language: str
+    words: List[CrosswordWord]
+    grid_size: List[int]  # [rows, cols]
+    grid: List[List[str]]       # The actual letter grid
+
+class CrosswordRequest(BaseModel):
+    uid: str
+    date: str  # YYYY-MM-DD format
+    language: Literal["japanese", "korean"] = "japanese"
+
+# Word pools by difficulty (expand these as needed)
+WORD_POOLS = {
+    "japanese": {
+        "N5": ["犬", "猫", "本", "水", "食べる", "見る", "大きい", "小さい", "赤い", "青い", "新しい", "古い"],
+        "N4": ["病院", "電話", "写真", "勉強", "買い物", "料理", "時間", "お金", "仕事", "学校"],
+        "N3": ["会議", "経験", "関係", "説明", "連絡", "準備", "計画", "問題", "方法", "結果"],
+        "N2": ["環境", "技術", "政治", "経済", "文化", "社会", "自然", "科学", "歴史", "未来"],
+        "N1": ["哲学", "概念", "抽象", "具体", "理論", "実践", "構造", "機能", "本質", "現象"]
+    },
+    "korean": {
+        "TOPIK1": ["개", "고양이", "책", "물", "먹다", "보다", "크다", "작다", "빨갛다", "파랗다", "새롭다", "오래되다"],
+        "TOPIK2": ["병원", "전화", "사진", "공부", "쇼핑", "요리", "시간", "돈", "일", "학교"],
+        "TOPIK3": ["회의", "경험", "관계", "설명", "연락", "준비", "계획", "문제", "방법", "결과"],
+        "TOPIK4": ["환경", "기술", "정치", "경제", "문화", "사회", "자연", "과학", "역사", "미래"],
+        "TOPIK5": ["철학", "개념", "추상", "구체", "이론", "실천", "구조", "기능", "본질", "현상"],
+        "TOPIK6": ["인식론", "존재론", "현상학", "변증법", "체계", "형이상학", "윤리학", "미학", "논리학", "방법론"]
+    }
+}
+
+def select_daily_words(language: str, target_date: str) -> List[str]:
+    """Select words for the day based on difficulty distribution"""
+    # Use date as seed for consistent daily puzzles
+    random.seed(target_date + language)
+    
+    if language == "japanese":
+        selected = []
+        selected.extend(random.sample(WORD_POOLS["japanese"]["N5"], 3))
+        selected.extend(random.sample(WORD_POOLS["japanese"]["N4"], 2))
+        selected.extend([random.choice(WORD_POOLS["japanese"]["N3"])])
+        selected.extend([random.choice(WORD_POOLS["japanese"]["N2"])])
+        selected.extend([random.choice(WORD_POOLS["japanese"]["N1"])])
+    else:
+        selected = []
+        selected.extend(random.sample(WORD_POOLS["korean"]["TOPIK1"], 3))
+        selected.extend(random.sample(WORD_POOLS["korean"]["TOPIK2"], 2))
+        selected.extend([random.choice(WORD_POOLS["korean"]["TOPIK3"])])
+        selected.extend([random.choice(WORD_POOLS["korean"]["TOPIK4"])])
+        selected.extend([random.choice(WORD_POOLS["korean"]["TOPIK5"])])
+    
+    return selected
+
+async def generate_crossword_clues(words: List[str], language: str) -> Dict[str, Dict]:
+    """Generate clues and hints for words using AI"""
+    
+    # Use your existing PROMPTS system
+    prompt = f"""Generate crossword clues and hints for these {language} words: {', '.join(words)}
+
+For each word, provide:
+1. A crossword clue in {language} (short, cryptic style like newspaper crosswords)
+2. A crossword clue in English (short, cryptic style)
+3. Two helpful hints in English (not direct translations, but helpful context)
+4. The difficulty level for each word
+
+Format as JSON:
+{{
+  "word1": {{
+    "clue_original": "clue in {language}",
+    "clue_english": "clue in English", 
+    "hints": ["hint 1", "hint 2"],
+    "difficulty": "N5" or "TOPIK1" etc
+  }},
+  "word2": {{ ... }}
+}}
+
+Make clues challenging but fair. Use wordplay, synonyms, or context clues rather than direct definitions."""
+
+    response = await client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        response_format={"type": "json_object"}
+    )
+    
+    return json.loads(response.choices[0].message.content)
+
+def create_crossword_grid(word_data: Dict) -> Tuple[List[List[str]], List[CrosswordWord]]:
+    """Create a proper rectangular crossword grid"""
+    
+    words = list(word_data.keys())
+    grid_size = 15
+    # Initialize with black squares (represented as '.')
+    grid = [['.' for _ in range(grid_size)] for _ in range(grid_size)]
+    
+    placed_words = []
+    
+    # Place first word horizontally in center
+    first_word = words[0]
+    start_row = grid_size // 2
+    start_col = (grid_size - len(first_word)) // 2
+    
+    # Mark this row/area as "word space" - we'll place letters here
+    for i, letter in enumerate(first_word):
+        grid[start_row][start_col + i] = letter
+    
+    placed_words.append(CrosswordWord(
+        word=first_word,
+        clue_original=word_data[first_word]["clue_original"],
+        clue_english=word_data[first_word]["clue_english"],
+        hints=word_data[first_word]["hints"],
+        difficulty=word_data[first_word]["difficulty"],
+        start_row=start_row,
+        start_col=start_col,
+        direction="across",
+        number=1
+    ))
+    
+    number = 2
+    
+    # Strategy: Place words in a more structured pattern
+    # This creates a more traditional crossword appearance
+    
+    for word in words[1:]:
+        placed = False
+        
+        # Try to intersect with existing words first
+        for existing_word in placed_words:
+            if placed:
+                break
+                
+            for i, word_letter in enumerate(word):
+                for j, existing_letter in enumerate(existing_word.word):
+                    if word_letter == existing_letter:
+                        # Calculate perpendicular placement
+                        if existing_word.direction == "across":
+                            new_start_row = existing_word.start_row - i
+                            new_start_col = existing_word.start_col + j
+                            direction = "down"
+                        else:
+                            new_start_row = existing_word.start_row + j
+                            new_start_col = existing_word.start_col - i
+                            direction = "across"
+                        
+                        if is_valid_crossword_placement(grid, word, new_start_row, new_start_col, direction, grid_size):
+                            place_word_in_grid(grid, word, new_start_row, new_start_col, direction)
+                            placed_words.append(CrosswordWord(
+                                word=word,
+                                clue_original=word_data[word]["clue_original"],
+                                clue_english=word_data[word]["clue_english"],
+                                hints=word_data[word]["hints"],
+                                difficulty=word_data[word]["difficulty"],
+                                start_row=new_start_row,
+                                start_col=new_start_col,
+                                direction=direction,
+                                number=number
+                            ))
+                            number += 1
+                            placed = True
+                            break
+                if placed:
+                    break
+        
+        # If no intersection found, place strategically in grid pattern
+        if not placed:
+            placement = find_strategic_placement(grid, word, grid_size, placed_words)
+            if placement:
+                row, col, direction = placement
+                place_word_in_grid(grid, word, row, col, direction)
+                placed_words.append(CrosswordWord(
+                    word=word,
+                    clue_original=word_data[word]["clue_original"],
+                    clue_english=word_data[word]["clue_english"],
+                    hints=word_data[word]["hints"],
+                    difficulty=word_data[word]["difficulty"],
+                    start_row=row,
+                    start_col=col,
+                    direction=direction,
+                    number=number
+                ))
+                number += 1
+    
+    # Keep the grid as-is - black squares ('.') will be handled by the frontend
+    return grid, placed_words
+
+def is_valid_crossword_placement(grid, word, start_row, start_col, direction, grid_size):
+    """Check if word placement is valid for crossword rules"""
+    
+    if direction == "across":
+        # Check bounds
+        if (start_row < 0 or start_row >= grid_size or 
+            start_col < 0 or start_col + len(word) > grid_size):
+            return False
+        
+        # Check each letter position
+        for i, char in enumerate(word):
+            current_cell = grid[start_row][start_col + i]
+            # Can place if empty or same letter (intersection)
+            if current_cell != '.' and current_cell != char:
+                return False
+        
+        # Crossword rule: can't have adjacent words
+        # Check before and after
+        if start_col > 0 and grid[start_row][start_col - 1] != '.':
+            return False
+        if start_col + len(word) < grid_size and grid[start_row][start_col + len(word)] != '.':
+            return False
+        
+        return True
+    
+    else:  # down
+        # Check bounds
+        if (start_col < 0 or start_col >= grid_size or 
+            start_row < 0 or start_row + len(word) > grid_size):
+            return False
+        
+        # Check each letter position
+        for i, char in enumerate(word):
+            current_cell = grid[start_row + i][start_col]
+            if current_cell != '.' and current_cell != char:
+                return False
+        
+        # Check before and after
+        if start_row > 0 and grid[start_row - 1][start_col] != '.':
+            return False
+        if start_row + len(word) < grid_size and grid[start_row + len(word)][start_col] != '.':
+            return False
+        
+        return True
+
+def place_word_in_grid(grid, word, start_row, start_col, direction):
+    """Place word in the grid"""
+    if direction == "across":
+        for i, char in enumerate(word):
+            grid[start_row][start_col + i] = char
+    else:  # down
+        for i, char in enumerate(word):
+            grid[start_row + i][start_col] = char
+
+def find_strategic_placement(grid, word, grid_size, existing_words):
+    """Find good placement that maintains crossword structure"""
+    
+    # Define strategic positions that create a nice crossword pattern
+    strategic_positions = [
+        # Horizontal placements
+        (3, 1, "across"), (3, 8, "across"),
+        (5, 2, "across"), (5, 9, "across"), 
+        (9, 1, "across"), (9, 8, "across"),
+        (11, 3, "across"), (11, 7, "across"),
+        
+        # Vertical placements  
+        (1, 3, "down"), (1, 7, "down"), (1, 11, "down"),
+        (2, 5, "down"), (2, 9, "down"),
+        (8, 2, "down"), (8, 6, "down"), (8, 12, "down"),
+    ]
+    
+    # Try each strategic position
+    for start_row, start_col, direction in strategic_positions:
+        if is_valid_crossword_placement(grid, word, start_row, start_col, direction, grid_size):
+            return (start_row, start_col, direction)
+    
+    # Fallback: try any valid position
+    for row in range(1, grid_size - 1):
+        for col in range(1, grid_size - 1):
+            for direction in ["across", "down"]:
+                if is_valid_crossword_placement(grid, word, row, col, direction, grid_size):
+                    return (row, col, direction)
+    
+    return None
+
+def check_adjacency_rules(grid, word, start_row, start_col, direction, grid_size):
+    """Ensure words don't create invalid adjacencies"""
+    if direction == "across":
+        # Check cells before and after word
+        if start_col > 0 and grid[start_row][start_col - 1] != '.':
+            return False
+        if start_col + len(word) < grid_size and grid[start_row][start_col + len(word)] != '.':
+            return False
+        
+        # Check cells above and below (only where word doesn't intersect)
+        for i, char in enumerate(word):
+            col = start_col + i
+            if grid[start_row][col] == '.':  # New placement, not intersection
+                # Check above
+                if start_row > 0 and grid[start_row - 1][col] != '.':
+                    return False
+                # Check below
+                if start_row < grid_size - 1 and grid[start_row + 1][col] != '.':
+                    return False
+    
+    else:  # down
+        # Check cells before and after word
+        if start_row > 0 and grid[start_row - 1][start_col] != '.':
+            return False
+        if start_row + len(word) < grid_size and grid[start_row + len(word)][start_col] != '.':
+            return False
+        
+        # Check cells left and right (only where word doesn't intersect)
+        for i, char in enumerate(word):
+            row = start_row + i
+            if grid[row][start_col] == '.':  # New placement, not intersection
+                # Check left
+                if start_col > 0 and grid[row][start_col - 1] != '.':
+                    return False
+                # Check right
+                if start_col < grid_size - 1 and grid[row][start_col + 1] != '.':
+                    return False
+    
+    return True
+
+
+
+def create_crossword_word(word, word_info, start_row, start_col, direction, number):
+    """Helper to create CrosswordWord object"""
+    return CrosswordWord(
+        word=word,
+        clue_original=word_info["clue_original"],
+        clue_english=word_info["clue_english"],
+        hints=word_info["hints"],
+        difficulty=word_info["difficulty"],
+        start_row=start_row,
+        start_col=start_col,
+        direction=direction,
+        number=number
+    )
+
+# Add this endpoint to your main.py
+@app.post("/crossword/daily")
+async def get_daily_crossword(body: CrosswordRequest):
+    """Get or generate daily crossword puzzle"""
+    
+    try:
+        print(f"🧩 Crossword request - UID: {body.uid}, Date: {body.date}, Language: {body.language}")
+        
+        # 1. Select words for the day
+        words = select_daily_words(body.language, body.date)
+        print(f"📝 Selected words: {words}")
+        
+        # 2. Generate clues and hints
+        word_data = await generate_crossword_clues(words, body.language)
+        print(f"🎯 Generated clues for {len(word_data)} words")
+        
+        # 3. Create crossword grid
+        grid, placed_words = create_crossword_grid(word_data)
+        print(f"🎲 Placed {len(placed_words)} words in grid")
+        
+        # 4. Return puzzle
+        puzzle = CrosswordPuzzle(
+            id=f"{body.date}_{body.language}",
+            date=body.date,
+            language=body.language,
+            words=placed_words,
+            grid_size=[len(grid), len(grid[0])],
+            grid=grid
+        )
+        
+        return puzzle.dict()
+        
+    except Exception as e:
+        print(f"❌ Crossword generation error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to generate crossword: {str(e)}"}
+        )

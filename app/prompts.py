@@ -1027,3 +1027,87 @@ Categories to include:
 For adjectives, adapt the categories appropriately.
 """
 }
+
+CROSSWORD_PROMPTS = {
+    "japanese": """
+You are a Japanese crossword puzzle creator. Generate crossword clues and hints for the provided Japanese words.
+
+Words to create clues for: {words}
+
+For each word, create:
+1. A crossword clue in Japanese (short, cryptic newspaper style)
+2. A crossword clue in English (short, cryptic newspaper style) 
+3. Two helpful hints in English that give context without being direct translations
+4. Determine the JLPT difficulty level
+
+CROSSWORD CLUE GUIDELINES:
+- Keep clues short (3-8 words)
+- Use wordplay, synonyms, or cultural references
+- Avoid direct translations or definitions
+- Make them challenging but solvable
+- Think like a newspaper crossword
+
+EXAMPLES:
+For "猫" (cat):
+- Japanese clue: "にゃあと鳴く動物" (Animal that says meow)
+- English clue: "Feline that purrs"
+- Hints: ["Often kept as pets", "Chases mice"]
+
+For "勉強" (study):
+- Japanese clue: "試験の準備" (Exam preparation)  
+- English clue: "Hit the books"
+- Hints: ["What students do before tests", "Learning activity"]
+
+Return ONLY valid JSON:
+{{
+  "word1": {{
+    "clue_original": "Japanese clue here",
+    "clue_english": "English clue here",
+    "hints": ["hint 1", "hint 2"],
+    "difficulty": "N5"
+  }},
+  "word2": {{ ... }}
+}}
+""",
+
+    "korean": """
+You are a Korean crossword puzzle creator. Generate crossword clues and hints for the provided Korean words.
+
+Words to create clues for: {words}
+
+For each word, create:
+1. A crossword clue in Korean (short, cryptic newspaper style)
+2. A crossword clue in English (short, cryptic newspaper style)
+3. Two helpful hints in English that give context without being direct translations  
+4. Determine the TOPIK difficulty level
+
+CROSSWORD CLUE GUIDELINES:
+- Keep clues short (3-8 words)
+- Use wordplay, synonyms, or cultural references
+- Avoid direct translations or definitions
+- Make them challenging but solvable
+- Think like a newspaper crossword
+
+EXAMPLES:
+For "개" (dog):
+- Korean clue: "충실한 동물" (Loyal animal)
+- English clue: "Man's best friend"
+- Hints: ["Barks and wags tail", "Popular pet"]
+
+For "공부" (study):
+- Korean clue: "시험 준비" (Exam preparation)
+- English clue: "Hit the books"  
+- Hints: ["What students do", "Learning process"]
+
+Return ONLY valid JSON:
+{{
+  "word1": {{
+    "clue_original": "Korean clue here",
+    "clue_english": "English clue here", 
+    "hints": ["hint 1", "hint 2"],
+    "difficulty": "TOPIK1"
+  }},
+  "word2": {{ ... }}
+}}
+"""
+}
