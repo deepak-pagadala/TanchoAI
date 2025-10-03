@@ -6,6 +6,8 @@ from typing import Literal, List, Dict, Optional, Tuple
 import os, sys, json
 import uuid
 import random
+import hashlib
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -50,7 +52,7 @@ from app.dummy_store import (
     inc_topic, topic_hits,
     remember_resource, last_resource
 )
-from app.prompts   import PROMPTS, DICTIONARY_PROMPTS, SENTENCE_ANALYSIS_PROMPTS, CONJUGATION_PROMPTS
+from app.prompts   import PROMPTS, DICTIONARY_PROMPTS, SENTENCE_ANALYSIS_PROMPTS, CONJUGATION_PROMPTS, CROSSWORD_PROMPTS
 from app.resources import match_resources
 
 # ───────── config & constants ─────────
@@ -1643,20 +1645,25 @@ async def clear_conjugation_cache():
     return {"message": f"Cleared {cache_size} cached conjugation entries"}
 
 # ===============================================================
-# 7. Crossword
+# 7. Crossword  —  UPDATED
 # ===============================================================
 
+# Add these imports at the top if not already present
+from typing import Tuple, List, Dict, Literal
+import random
+import json
+from pydantic import BaseModel
 
-# Add these models after your existing models
+# ───────────────────────── Models ─────────────────────────
 class CrosswordWord(BaseModel):
     word: str
-    clue_original: str  # Japanese/Korean
+    clue_original: str
     clue_english: str
-    hints: List[str]    # 2 hints in English
-    difficulty: str     # N5, N4, etc or TOPIK 1-6
+    hints: List[str]
+    difficulty: str
     start_row: int
     start_col: int
-    direction: str      # "across" or "down"
+    direction: str  # "across" | "down"
     number: int
 
 class CrosswordPuzzle(BaseModel):
@@ -1664,363 +1671,792 @@ class CrosswordPuzzle(BaseModel):
     date: str
     language: str
     words: List[CrosswordWord]
-    grid_size: List[int]  # [rows, cols]
-    grid: List[List[str]]       # The actual letter grid
+    grid_size: List[int]         # [rows, cols]
+    grid: List[List[str]]        # "." for blocks, 1-char strings for letters
 
 class CrosswordRequest(BaseModel):
     uid: str
-    date: str  # YYYY-MM-DD format
+    date: str
     language: Literal["japanese", "korean"] = "japanese"
 
-# Word pools by difficulty (expand these as needed)
-WORD_POOLS = {
-    "japanese": {
-        "N5": ["犬", "猫", "本", "水", "食べる", "見る", "大きい", "小さい", "赤い", "青い", "新しい", "古い"],
-        "N4": ["病院", "電話", "写真", "勉強", "買い物", "料理", "時間", "お金", "仕事", "学校"],
-        "N3": ["会議", "経験", "関係", "説明", "連絡", "準備", "計画", "問題", "方法", "結果"],
-        "N2": ["環境", "技術", "政治", "経済", "文化", "社会", "自然", "科学", "歴史", "未来"],
-        "N1": ["哲学", "概念", "抽象", "具体", "理論", "実践", "構造", "機能", "本質", "現象"]
-    },
-    "korean": {
-        "TOPIK1": ["개", "고양이", "책", "물", "먹다", "보다", "크다", "작다", "빨갛다", "파랗다", "새롭다", "오래되다"],
-        "TOPIK2": ["병원", "전화", "사진", "공부", "쇼핑", "요리", "시간", "돈", "일", "학교"],
-        "TOPIK3": ["회의", "경험", "관계", "설명", "연락", "준비", "계획", "문제", "방법", "결과"],
-        "TOPIK4": ["환경", "기술", "정치", "경제", "문화", "사회", "자연", "과학", "역사", "미래"],
-        "TOPIK5": ["철학", "개념", "추상", "구체", "이론", "실천", "구조", "기능", "본질", "현상"],
-        "TOPIK6": ["인식론", "존재론", "현상학", "변증법", "체계", "형이상학", "윤리학", "미학", "논리학", "방법론"]
-    }
-}
 
-def select_daily_words(language: str, target_date: str) -> List[str]:
-    """Select words for the day based on difficulty distribution"""
-    # Use date as seed for consistent daily puzzles
-    random.seed(target_date + language)
-    
+from itertools import combinations
+import math
+
+# ───── Local fallback corpora (4–6 length for JP; 4–6 syllables for KR) ─────
+FALLBACK_JA = [
+    "ひこうき","こうえん","がっこう","すいえい","じてんしゃ","けいたい","なつやすみ","たいふう",
+    "どうぶつ","きょうしつ","しんかんせん","きっさてん","にんじん","すいぞくかん","たいいく",
+    "えんそく","しょうがつ","おとしだま","ゆうびんきょく","りょうり","にっき","びよういん",
+    "でんきゅう","すいどう","じどうしゃ","てんらんかい","こうさてん","おんがくかい","こくばん",
+    "せんせい","ともだち","けんがく","ぶんぼうぐ","きょうかしょ","たいいくかん","こうつうあんぜん"
+]
+
+FALLBACK_KO = [
+    "놀이공원","지하철역","버스정류장","휴대전화","전화번호","초등학교","고등학교","어린이집",
+    "유치원생","자동판매기","세탁기방","보건소장","영화관람","과학시간","문예활동","체육대회",
+    "도서관장","운동경기","생활안전","교통안전","자전거도로","축구경기장","농구경기장","수영수업",
+    "피아노학원","미술학원","컴퓨터실","우편번호","일기예보","환경보호","동물병원","소방서장"
+]
+
+def _has_middle_overlap(a: str, b: str) -> bool:
+    if len(a) <= 2 or len(b) <= 2:
+        return False
+    return bool(set(a[1:-1]) & set(b[1:-1]))
+
+def _valid_word(w: str, language: str, min_len=4, max_len=6) -> bool:
+    if not isinstance(w, str): return False
+    w = w.strip()
+    if not (min_len <= len(w) <= max_len): return False
+    if w[0] == w[-1]: return False
+    # crude particle filter (same as your validate_words)
     if language == "japanese":
-        selected = []
-        selected.extend(random.sample(WORD_POOLS["japanese"]["N5"], 3))
-        selected.extend(random.sample(WORD_POOLS["japanese"]["N4"], 2))
-        selected.extend([random.choice(WORD_POOLS["japanese"]["N3"])])
-        selected.extend([random.choice(WORD_POOLS["japanese"]["N2"])])
-        selected.extend([random.choice(WORD_POOLS["japanese"]["N1"])])
+        invalid = ["の","が","を","に","へ","と","や","から","まで","より","で","は"]
     else:
-        selected = []
-        selected.extend(random.sample(WORD_POOLS["korean"]["TOPIK1"], 3))
-        selected.extend(random.sample(WORD_POOLS["korean"]["TOPIK2"], 2))
-        selected.extend([random.choice(WORD_POOLS["korean"]["TOPIK3"])])
-        selected.extend([random.choice(WORD_POOLS["korean"]["TOPIK4"])])
-        selected.extend([random.choice(WORD_POOLS["korean"]["TOPIK5"])])
-    
-    return selected
-
-async def generate_crossword_clues(words: List[str], language: str) -> Dict[str, Dict]:
-    """Generate clues and hints for words using AI"""
-    
-    # Use your existing PROMPTS system
-    prompt = f"""Generate crossword clues and hints for these {language} words: {', '.join(words)}
-
-For each word, provide:
-1. A crossword clue in {language} (short, cryptic style like newspaper crosswords)
-2. A crossword clue in English (short, cryptic style)
-3. Two helpful hints in English (not direct translations, but helpful context)
-4. The difficulty level for each word
-
-Format as JSON:
-{{
-  "word1": {{
-    "clue_original": "clue in {language}",
-    "clue_english": "clue in English", 
-    "hints": ["hint 1", "hint 2"],
-    "difficulty": "N5" or "TOPIK1" etc
-  }},
-  "word2": {{ ... }}
-}}
-
-Make clues challenging but fair. Use wordplay, synonyms, or context clues rather than direct definitions."""
-
-    response = await client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
-        response_format={"type": "json_object"}
-    )
-    
-    return json.loads(response.choices[0].message.content)
-
-def create_crossword_grid(word_data: Dict) -> Tuple[List[List[str]], List[CrosswordWord]]:
-    """Create a proper rectangular crossword grid"""
-    
-    words = list(word_data.keys())
-    grid_size = 15
-    # Initialize with black squares (represented as '.')
-    grid = [['.' for _ in range(grid_size)] for _ in range(grid_size)]
-    
-    placed_words = []
-    
-    # Place first word horizontally in center
-    first_word = words[0]
-    start_row = grid_size // 2
-    start_col = (grid_size - len(first_word)) // 2
-    
-    # Mark this row/area as "word space" - we'll place letters here
-    for i, letter in enumerate(first_word):
-        grid[start_row][start_col + i] = letter
-    
-    placed_words.append(CrosswordWord(
-        word=first_word,
-        clue_original=word_data[first_word]["clue_original"],
-        clue_english=word_data[first_word]["clue_english"],
-        hints=word_data[first_word]["hints"],
-        difficulty=word_data[first_word]["difficulty"],
-        start_row=start_row,
-        start_col=start_col,
-        direction="across",
-        number=1
-    ))
-    
-    number = 2
-    
-    # Strategy: Place words in a more structured pattern
-    # This creates a more traditional crossword appearance
-    
-    for word in words[1:]:
-        placed = False
-        
-        # Try to intersect with existing words first
-        for existing_word in placed_words:
-            if placed:
-                break
-                
-            for i, word_letter in enumerate(word):
-                for j, existing_letter in enumerate(existing_word.word):
-                    if word_letter == existing_letter:
-                        # Calculate perpendicular placement
-                        if existing_word.direction == "across":
-                            new_start_row = existing_word.start_row - i
-                            new_start_col = existing_word.start_col + j
-                            direction = "down"
-                        else:
-                            new_start_row = existing_word.start_row + j
-                            new_start_col = existing_word.start_col - i
-                            direction = "across"
-                        
-                        if is_valid_crossword_placement(grid, word, new_start_row, new_start_col, direction, grid_size):
-                            place_word_in_grid(grid, word, new_start_row, new_start_col, direction)
-                            placed_words.append(CrosswordWord(
-                                word=word,
-                                clue_original=word_data[word]["clue_original"],
-                                clue_english=word_data[word]["clue_english"],
-                                hints=word_data[word]["hints"],
-                                difficulty=word_data[word]["difficulty"],
-                                start_row=new_start_row,
-                                start_col=new_start_col,
-                                direction=direction,
-                                number=number
-                            ))
-                            number += 1
-                            placed = True
-                            break
-                if placed:
-                    break
-        
-        # If no intersection found, place strategically in grid pattern
-        if not placed:
-            placement = find_strategic_placement(grid, word, grid_size, placed_words)
-            if placement:
-                row, col, direction = placement
-                place_word_in_grid(grid, word, row, col, direction)
-                placed_words.append(CrosswordWord(
-                    word=word,
-                    clue_original=word_data[word]["clue_original"],
-                    clue_english=word_data[word]["clue_english"],
-                    hints=word_data[word]["hints"],
-                    difficulty=word_data[word]["difficulty"],
-                    start_row=row,
-                    start_col=col,
-                    direction=direction,
-                    number=number
-                ))
-                number += 1
-    
-    # Keep the grid as-is - black squares ('.') will be handled by the frontend
-    return grid, placed_words
-
-def is_valid_crossword_placement(grid, word, start_row, start_col, direction, grid_size):
-    """Check if word placement is valid for crossword rules"""
-    
-    if direction == "across":
-        # Check bounds
-        if (start_row < 0 or start_row >= grid_size or 
-            start_col < 0 or start_col + len(word) > grid_size):
-            return False
-        
-        # Check each letter position
-        for i, char in enumerate(word):
-            current_cell = grid[start_row][start_col + i]
-            # Can place if empty or same letter (intersection)
-            if current_cell != '.' and current_cell != char:
-                return False
-        
-        # Crossword rule: can't have adjacent words
-        # Check before and after
-        if start_col > 0 and grid[start_row][start_col - 1] != '.':
-            return False
-        if start_col + len(word) < grid_size and grid[start_row][start_col + len(word)] != '.':
-            return False
-        
-        return True
-    
-    else:  # down
-        # Check bounds
-        if (start_col < 0 or start_col >= grid_size or 
-            start_row < 0 or start_row + len(word) > grid_size):
-            return False
-        
-        # Check each letter position
-        for i, char in enumerate(word):
-            current_cell = grid[start_row + i][start_col]
-            if current_cell != '.' and current_cell != char:
-                return False
-        
-        # Check before and after
-        if start_row > 0 and grid[start_row - 1][start_col] != '.':
-            return False
-        if start_row + len(word) < grid_size and grid[start_row + len(word)][start_col] != '.':
-            return False
-        
-        return True
-
-def place_word_in_grid(grid, word, start_row, start_col, direction):
-    """Place word in the grid"""
-    if direction == "across":
-        for i, char in enumerate(word):
-            grid[start_row][start_col + i] = char
-    else:  # down
-        for i, char in enumerate(word):
-            grid[start_row + i][start_col] = char
-
-def find_strategic_placement(grid, word, grid_size, existing_words):
-    """Find good placement that maintains crossword structure"""
-    
-    # Define strategic positions that create a nice crossword pattern
-    strategic_positions = [
-        # Horizontal placements
-        (3, 1, "across"), (3, 8, "across"),
-        (5, 2, "across"), (5, 9, "across"), 
-        (9, 1, "across"), (9, 8, "across"),
-        (11, 3, "across"), (11, 7, "across"),
-        
-        # Vertical placements  
-        (1, 3, "down"), (1, 7, "down"), (1, 11, "down"),
-        (2, 5, "down"), (2, 9, "down"),
-        (8, 2, "down"), (8, 6, "down"), (8, 12, "down"),
-    ]
-    
-    # Try each strategic position
-    for start_row, start_col, direction in strategic_positions:
-        if is_valid_crossword_placement(grid, word, start_row, start_col, direction, grid_size):
-            return (start_row, start_col, direction)
-    
-    # Fallback: try any valid position
-    for row in range(1, grid_size - 1):
-        for col in range(1, grid_size - 1):
-            for direction in ["across", "down"]:
-                if is_valid_crossword_placement(grid, word, row, col, direction, grid_size):
-                    return (row, col, direction)
-    
-    return None
-
-def check_adjacency_rules(grid, word, start_row, start_col, direction, grid_size):
-    """Ensure words don't create invalid adjacencies"""
-    if direction == "across":
-        # Check cells before and after word
-        if start_col > 0 and grid[start_row][start_col - 1] != '.':
-            return False
-        if start_col + len(word) < grid_size and grid[start_row][start_col + len(word)] != '.':
-            return False
-        
-        # Check cells above and below (only where word doesn't intersect)
-        for i, char in enumerate(word):
-            col = start_col + i
-            if grid[start_row][col] == '.':  # New placement, not intersection
-                # Check above
-                if start_row > 0 and grid[start_row - 1][col] != '.':
-                    return False
-                # Check below
-                if start_row < grid_size - 1 and grid[start_row + 1][col] != '.':
-                    return False
-    
-    else:  # down
-        # Check cells before and after word
-        if start_row > 0 and grid[start_row - 1][start_col] != '.':
-            return False
-        if start_row + len(word) < grid_size and grid[start_row + len(word)][start_col] != '.':
-            return False
-        
-        # Check cells left and right (only where word doesn't intersect)
-        for i, char in enumerate(word):
-            row = start_row + i
-            if grid[row][start_col] == '.':  # New placement, not intersection
-                # Check left
-                if start_col > 0 and grid[row][start_col - 1] != '.':
-                    return False
-                # Check right
-                if start_col < grid_size - 1 and grid[row][start_col + 1] != '.':
-                    return False
-    
+        invalid = ["의","가","을","를","에","에서","으로","로","와","과","이","은","는","도"]
+    if any(w.endswith(p) for p in invalid): return False
+    if sum(1 for p in invalid if p in w) > 1: return False
     return True
 
+def _pick_starter_trio(pool: list[str], language: str) -> list[str] | None:
+    """
+    Pick 3 words such that:
+      - each is valid (len, no particles, first!=last)
+      - at least the second intersects the first by a MIDDLE char
+      - the third intersects the first or second by a MIDDLE char
+    Prefer higher total middle-overlap 'score'.
+    """
+    # Filter valid first
+    cand = [w for w in pool if _valid_word(w, language, 4, 6)]
+    best = None
+    for a, b, c in combinations(cand, 3):
+        # enforce middle intersections chain
+        ab = _has_middle_overlap(a, b)
+        ac = _has_middle_overlap(a, c)
+        bc = _has_middle_overlap(b, c)
+        # Need at least a connected shape: (ab and (ac or bc)) or ((ac and bc))
+        connected = (ab and (ac or bc)) or (ac and bc)
+        if not connected:
+            continue
+        # score = total distinct middle overlaps
+        score = 0
+        if ab: score += 1
+        if ac: score += 1
+        if bc: score += 1
+        # prefer diverse middles (more unique middle chars)
+        mid_chars = set(a[1:-1]) | set(b[1:-1]) | set(c[1:-1])
+        diversity = len(mid_chars)
+        key = (score, diversity)
+        if best is None or key > best[0]:
+            best = (key, [a, b, c])
+    return best[1] if best else None
 
+def _fill_intersecting(existing: list[str], language: str, target_total: int, pool: list[str]) -> list[str]:
+    added = []
+    used = set(existing)
+    def intersects_mid(w: str) -> bool:
+        return any(_has_middle_overlap(w, x) for x in existing + added)
 
-def create_crossword_word(word, word_info, start_row, start_col, direction, number):
-    """Helper to create CrosswordWord object"""
-    return CrosswordWord(
-        word=word,
-        clue_original=word_info["clue_original"],
-        clue_english=word_info["clue_english"],
-        hints=word_info["hints"],
-        difficulty=word_info["difficulty"],
-        start_row=start_row,
-        start_col=start_col,
-        direction=direction,
-        number=number
+    for w in pool:
+        if len(existing) + len(added) >= target_total: break
+        if w in used: continue
+        if not _valid_word(w, language, 3, 8): continue
+        if intersects_mid(w):
+            added.append(w)
+            used.add(w)
+    return added
+
+# ─────────────────────── Generation ───────────────────────
+async def generate_crossword_vocabulary(language: str, date: str) -> List[str]:
+    """Robust generation: try LLM; if no trio, expand pool; then fall back to local corpus. Always returns 10."""
+    rng = random.Random(f"{date}:{language}:gen")
+
+    # ---------- Step A: Try to get a valid starter trio from the LLM ----------
+    max_retries = 6
+    starters: list[str] | None = None
+
+    # 1) Small ask first (exactly 3), pick trio if already valid+connected
+    for attempt in range(max_retries):
+        try:
+            resp = await client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": "Generate REAL, COMMON words. First and last MUST differ. No particles."},
+                    {"role": "user", "content": (
+                        f"Generate EXACTLY 3 {('Japanese (hiragana)' if language=='japanese' else 'Korean')} starter words for a crossword.\n"
+                        "Rules:\n"
+                        "- length 4-6 (for Korean: 4-6 syllables)\n"
+                        "- first and last must differ\n"
+                        "- common words only\n"
+                        "- ensure the 3 words share at least one MIDDLE character/syllable among them (not the first/last)\n"
+                        'Return ONLY JSON: {"words": ["w1","w2","w3"]}'
+                    )},
+                ],
+                temperature=0.7 + 0.05 * attempt,
+                response_format={"type": "json_object"},
+            )
+            data = json.loads(resp.choices[0].message.content.strip())
+            w = data.get("words", [])
+            v = validate_words(w, language, min_len=4, max_len=6, enforce_diff_ends=True)
+            if len(v) >= 3 and has_any_middle_overlap(v[:3]):
+                starters = v[:3]
+                print(f"Starter generation successful on attempt {attempt+1}")
+                break
+            else:
+                print(f"Attempt {attempt+1}: Got {len(v)} valid words, need 3 (with middle overlaps)")
+        except Exception as e:
+            print(f"Starter attempt {attempt+1} failed: {e}")
+
+    # 2) If that failed, ask for a bigger pool (8–12) and pick a trio locally
+    if starters is None:
+        pool_attempts = 4
+        for ptry in range(pool_attempts):
+            try:
+                batch = 8 + 2 * ptry  # 8,10,12,14
+                resp = await client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": "Generate REAL, COMMON words. First and last MUST differ. No particles."},
+                        {"role": "user", "content": (
+                            f"Give {batch} {('Japanese (hiragana)' if language=='japanese' else 'Korean')} words for a crossword word bank.\n"
+                            "Rules:\n"
+                            "- length 4-6 (for Korean: 4-6 syllables)\n"
+                            "- first and last must differ\n"
+                            "- common words only\n"
+                            "Return ONLY JSON: {\"words\": [ ... ]}"
+                        )},
+                    ],
+                    temperature=0.9 + 0.05 * ptry,
+                    response_format={"type": "json_object"},
+                )
+                data = json.loads(resp.choices[0].message.content.strip())
+                pool = data.get("words", [])
+                pool = validate_words(pool, language, min_len=4, max_len=6, enforce_diff_ends=True)
+                trio = _pick_starter_trio(pool, language)
+                if trio:
+                    starters = trio
+                    print(f"Starter trio selected from pool on attempt {ptry+1}: {trio}")
+                    break
+                else:
+                    print(f"Pool attempt {ptry+1}: no connected trio found in {len(pool)} candidates")
+            except Exception as e:
+                print(f"Pool attempt {ptry+1} failed: {e}")
+
+    # 3) Final fallback: pick a trio from local corpus (deterministic)
+    if starters is None:
+        corpus = FALLBACK_JA if language == "japanese" else FALLBACK_KO
+        # Shuffle deterministically, then pick trio
+        c = corpus[:]
+        rng.shuffle(c)
+        trio = _pick_starter_trio(c, language)
+        if not trio:
+            # try unshuffled as last resort
+            trio = _pick_starter_trio(corpus, language)
+        if not trio:
+            # ultra-safe: just pick 3 valid words (even if not connected; grid placer will enforce)
+            trio = [w for w in corpus if _valid_word(w, language, 4, 6)][:3]
+        starters = trio
+        print(f"Using local fallback starters: {starters}")
+
+    # ---------- Step B: Build up to 10 words ----------
+    all_words = starters[:]
+    target_total = 10
+    max_continuation_attempts = 10
+    attempt_idx = 0
+
+    while len(all_words) < target_total and attempt_idx < max_continuation_attempts:
+        attempt_idx += 1
+        remaining = target_total - len(all_words)
+        batch_size = min(4, remaining)
+
+        # Analyze existing words for prompt
+        word_analysis = analyze_middle_characters(all_words)
+        priority_chars = get_priority_characters(all_words, language)
+
+        continuation_prompt = f"""
+You have these existing crossword words: {", ".join(all_words)}
+Generate {batch_size} MORE {('Japanese (hiragana)' if language=='japanese' else 'Korean')} words that will intersect well.
+
+Rules:
+1) Return EXACTLY {batch_size} words
+2) Length 3-8 (for Korean: 3-8 syllables)
+3) First and last must differ
+4) REAL, common words only (no particles)
+5) EACH new word MUST share at least ONE MIDDLE character/syllable with an existing word (not first/last)
+
+Existing words middle characters/syllables:
+{word_analysis}
+
+Priority to use: {priority_chars}
+
+Return ONLY JSON: {{"words": ["w1","w2","w3","w4"]}}
+""".strip()
+
+        try:
+            resp = await client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": "Generate REAL words that intersect. No particles. First/last must differ."},
+                    {"role": "user", "content": continuation_prompt},
+                ],
+                temperature=0.8 + attempt_idx * 0.02,
+                response_format={"type": "json_object"},
+            )
+            data = json.loads(resp.choices[0].message.content.strip())
+            new_words = data.get("words", [])
+            valid_new = []
+            for w in new_words:
+                v = validate_words([w], language, min_len=3, max_len=8, enforce_diff_ends=True)
+                if v and has_middle_intersection(v[0], all_words) and v[0] not in all_words:
+                    valid_new.append(v[0])
+
+            if valid_new:
+                print(f"Added {len(valid_new)} intersecting words (attempt {attempt_idx})")
+                all_words.extend(valid_new)
+            else:
+                print(f"Continuation attempt {attempt_idx}: No valid words generated")
+        except Exception as e:
+            print(f"Continuation attempt {attempt_idx} error: {e}")
+
+    # ---------- Step C: If still short, fill from local corpus ----------
+    if len(all_words) < target_total:
+        corpus = FALLBACK_JA if language == "japanese" else FALLBACK_KO
+        # Put most promising (by middle-char frequency) first, but shuffle deterministically within ties
+        extra_pool = corpus[:]
+        rng.shuffle(extra_pool)
+        added = _fill_intersecting(all_words, language, target_total, extra_pool)
+        if added:
+            print(f"Filled {len(added)} words from local corpus")
+            all_words.extend(added)
+
+    # Last resort: if still short (should be rare), just append any valid uniques
+    if len(all_words) < target_total:
+        corpus = FALLBACK_JA if language == "japanese" else FALLBACK_KO
+        for w in corpus:
+            if len(all_words) >= target_total: break
+            if w not in all_words and _valid_word(w, language, 3, 8):
+                all_words.append(w)
+        print(f"Final emergency fill; total now {len(all_words)}")
+
+    final_words = all_words[:target_total]
+    print(f"Final word list ({len(final_words)} words): {final_words}")
+    return final_words
+
+# ────────────────────── Validators/helpers ──────────────────────
+def validate_words(words: List[str], language: str, min_len: int = 3, max_len: int = 8, enforce_diff_ends: bool = True) -> List[str]:
+    """Validate words - check length, filter particles, ensure first≠last, basic cleanliness."""
+    validated: List[str] = []
+
+    if language == "japanese":
+        invalid_patterns = ["の", "が", "を", "に", "へ", "と", "や", "から", "まで", "より", "で", "は"]
+    else:
+        invalid_patterns = ["의", "가", "을", "를", "에", "에서", "으로", "로", "와", "과", "이", "은", "는", "도"]
+
+    for w in words:
+        if not isinstance(w, str):
+            continue
+        w = w.strip()
+        if not (min_len <= len(w) <= max_len):
+            continue
+        if enforce_diff_ends and len(w) >= 2 and w[0] == w[-1]:
+            continue
+        # end particle
+        if any(w.endswith(p) for p in invalid_patterns):
+            continue
+        # overstuffed with particles
+        if sum(1 for p in invalid_patterns if p in w) > 1:
+            continue
+        validated.append(w)
+    return validated
+
+def get_priority_characters(words: List[str], language: str) -> str:
+    """Get most common middle characters for intersection."""
+    counts: Dict[str, int] = {}
+    for w in words:
+        if len(w) > 2:
+            for ch in w[1:-1]:
+                counts[ch] = counts.get(ch, 0) + 1
+    top = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    return ", ".join([c for c, _ in top]) if top else "any common characters"
+
+def analyze_middle_characters(words: List[str]) -> str:
+    lines = []
+    for w in words:
+        if len(w) > 2:
+            lines.append(f"  - '{w}': {', '.join(list(w[1:-1]))}")
+    return "\n".join(lines)
+
+def has_middle_intersection(new_word: str, existing_words: List[str]) -> bool:
+    if len(new_word) <= 2:
+        return False
+    S = set(new_word[1:-1])
+    for ex in existing_words:
+        if len(ex) > 2 and S & set(ex[1:-1]):
+            return True
+    return False
+
+def has_any_middle_overlap(words: List[str]) -> bool:
+    """At least one pair shares a middle character."""
+    mids = [set(w[1:-1]) for w in words if len(w) > 2]
+    for i in range(len(mids)):
+        for j in range(i+1, len(mids)):
+            if mids[i] & mids[j]:
+                return True
+    return False
+
+# ───────────────────── Clue generation (unchanged) ─────────────────────
+async def generate_crossword_clues(words: List[str], language: str) -> Dict[str, Dict]:
+    prompt_template = CROSSWORD_PROMPTS.get(language, CROSSWORD_PROMPTS["japanese"])
+    prompt = prompt_template.format(words=", ".join(words))
+    try:
+        response = await client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": "You are a crossword puzzle creator. Return ONLY valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            response_format={"type": "json_object"},
+        )
+        text = response.choices[0].message.content.strip()
+        if text.startswith("```json"):
+            text = text[7:-3].strip()
+        return json.loads(text)
+    except Exception as e:
+        print(f"Clue generation error: {e}")
+        fallback: Dict[str, Dict] = {}
+        for w in words:
+            fallback[w] = {
+                "clue_original": f"{w}の意味は?" if language == "japanese" else f"{w}의 의미는?",
+                "clue_english": f"What does {w} mean?",
+                "hints": ["Common word", "Basic vocabulary"],
+                "difficulty": "N5" if language == "japanese" else "TOPIK1",
+            }
+        return fallback
+
+# ───────────────────── Grid helpers ─────────────────────
+def place_word_in_grid(grid: List[List[str]], word: str, r: int, c: int, direction: str) -> None:
+    if direction == "across":
+        for i, ch in enumerate(word):
+            grid[r][c + i] = ch
+    else:
+        for i, ch in enumerate(word):
+            grid[r + i][c] = ch
+
+def _in_bounds(r: int, c: int, n: int) -> bool:
+    return 0 <= r < n and 0 <= c < n
+
+def _is_letter(ch: str) -> bool:
+    return isinstance(ch, str) and ch not in (".", "", " ")
+def can_place_word_strict(
+    grid: List[List[str]],
+    word: str,
+    start_row: int,
+    start_col: int,
+    direction: str,
+    grid_size: int,
+    require_overlap: bool = True
+) -> bool:
+    """Classic crossword checks with proper overlap exemption:
+       - Letters must match on overlaps
+       - No side contact (perpendicular adjacency) **except at overlap cells**
+       - Ends capped by '.' or bounds
+       - Require ≥1 real overlap for non-first words (optional)
+    """
+    def _in_bounds(r: int, c: int) -> bool:
+        return 0 <= r < grid_size and 0 <= c < grid_size
+
+    def _is_letter(ch: str) -> bool:
+        return isinstance(ch, str) and ch not in (".", "", " ")
+
+    dr, dc = (0, 1) if direction == "across" else (1, 0)
+
+    end_r = start_row + dr * (len(word) - 1)
+    end_c = start_col + dc * (len(word) - 1)
+    if not _in_bounds(start_row, start_col) or not _in_bounds(end_r, end_c):
+        return False
+
+    overlaps = 0
+    for i, ch in enumerate(word):
+        r = start_row + dr * i
+        c = start_col + dc * i
+        cell = grid[r][c]
+
+        # must be empty or same letter
+        if cell != "." and cell != ch:
+            return False
+
+        is_overlap = (cell == ch)
+        if is_overlap:
+            overlaps += 1
+
+        # ── Perpendicular adjacency (skip on true overlap cells) ──
+        if direction == "across":
+            if not is_overlap:  # ← key fix
+                for rr in (r - 1, r + 1):
+                    if _in_bounds(rr, c) and _is_letter(grid[rr][c]):
+                        return False
+        else:  # down
+            if not is_overlap:  # ← key fix
+                for cc in (c - 1, c + 1):
+                    if _in_bounds(r, cc) and _is_letter(grid[r][cc]):
+                        return False
+
+    # end caps
+    before_r, before_c = start_row - dr, start_col - dc
+    after_r, after_c   = end_r + dr,   end_c + dc
+    if _in_bounds(before_r, before_c) and (grid[before_r][before_c] != "."):
+        return False
+    if _in_bounds(after_r, after_c) and (grid[after_r][after_c] != "."):
+        return False
+
+    if require_overlap and overlaps == 0:
+        return False
+    return True
+
+def normalize_grid_chars(grid: List[List[str]]) -> List[List[str]]:
+    """Ensure all non-letter cells are '.' so the UI renders black blocks correctly."""
+    for r in range(len(grid)):
+        for c in range(len(grid[0])):
+            ch = grid[r][c]
+            if not _is_letter(ch):
+                grid[r][c] = "."
+    return grid
+
+def trim_grid(grid: List[List[str]]) -> Tuple[List[List[str]], int, int]:
+    """Trim grid to the minimal bounding box around letters, with 1-cell padding."""
+    rows, cols = len(grid), len(grid[0])
+    min_r, max_r = rows, -1
+    min_c, max_c = cols, -1
+
+    for r in range(rows):
+        for c in range(cols):
+            if _is_letter(grid[r][c]):
+                min_r = min(min_r, r)
+                max_r = max(max_r, r)
+                min_c = min(min_c, c)
+                max_c = max(max_c, c)
+
+    if max_r == -1:  # no letters
+        return [["."]], 0, 0
+
+    min_r = max(0, min_r - 1)
+    max_r = min(rows - 1, max_r + 1)
+    min_c = max(0, min_c - 1)
+    max_c = min(cols - 1, max_c + 1)
+
+    trimmed = [row[min_c : max_c + 1] for row in grid[min_r : max_r + 1]]
+    return trimmed, min_r, min_c
+
+# ───────────────────── Grid creation ─────────────────────
+def _connectivity_score(w: str, placed: List[CrosswordWord]) -> int:
+    """How many middle-char overlaps this word could make with placed words."""
+    if len(w) <= 2 or not placed:
+        return 0
+    mids = set(w[1:-1])
+    score = 0
+    for ex in placed:
+        exm = set(ex.word[1:-1]) if len(ex.word) > 2 else set()
+        if mids & exm:
+            score += 1
+    return score
+
+def _try_layout(words: List[str], word_data: Dict, date: str, language: str, grid_size: int, anchor_idx: int, rng: random.Random):
+    """Build one layout using a specific anchor index; return (placed_count, grid, placed_words)."""
+    # Copy so we can reorder per attempt
+    wlist = words[:]
+    # Put chosen anchor at index 0
+    wlist[0], wlist[anchor_idx] = wlist[anchor_idx], wlist[0]
+
+    # Fresh grid
+    grid = [["." for _ in range(grid_size)] for _ in range(grid_size)]
+    placed_words: List[CrosswordWord] = []
+
+    # 1) Place first anchor ACROSS centered
+    first = wlist[0]
+    r0 = grid_size // 2
+    c0 = (grid_size - len(first)) // 2
+    place_word_in_grid(grid, first, r0, c0, "across")
+    placed_words.append(
+        CrosswordWord(
+            word=first,
+            clue_original=word_data[first]["clue_original"],
+            clue_english=word_data[first]["clue_english"],
+            hints=word_data[first]["hints"],
+            difficulty=word_data[first]["difficulty"],
+            start_row=r0,
+            start_col=c0,
+            direction="across",
+            number=1,
+        )
     )
+    next_number = 2
 
-# Add this endpoint to your main.py
+    # 2) Choose BEST second word (from remaining) that intersects first going DOWN
+    best = None
+    for cand in wlist[1:]:
+        for i, ch1 in enumerate(first):
+            for j, ch2 in enumerate(cand):
+                if ch1 != ch2:
+                    continue
+                new_r = r0 - j
+                new_c = c0 + i
+                if can_place_word_strict(grid, cand, new_r, new_c, "down", grid_size, require_overlap=True):
+                    mid_score = -(abs(i - len(first)//2) + abs(j - len(cand)//2))
+                    center_bias = -(abs(new_r - grid_size//2) + abs(new_c - grid_size//2))
+                    score = mid_score + center_bias
+                    # deterministic tie-break
+                    tb = rng.random()
+                    if best is None or (score, tb) > (best[0], best[1]):
+                        best = (score, tb, cand, new_r, new_c)
+    if best is None:
+        return 1, grid, placed_words  # only the anchor placed
+
+    _, _, second_word, r2, c2 = best
+    place_word_in_grid(grid, second_word, r2, c2, "down")
+    placed_words.append(
+        CrosswordWord(
+            word=second_word,
+            clue_original=word_data[second_word]["clue_original"],
+            clue_english=word_data[second_word]["clue_english"],
+            hints=word_data[second_word]["hints"],
+            difficulty=word_data[second_word]["difficulty"],
+            start_row=r2,
+            start_col=c2,
+            direction="down",
+            number=next_number,
+        )
+    )
+    next_number += 1
+
+    # 3) Deterministic shuffle of remaining words, but bias by connectivity potential
+    remaining = [w for w in wlist[1:] if w != second_word]
+    # stable shuffle
+    rng.shuffle(remaining)
+
+    # Placement loop: at each step, sort remaining by connectivity to currently placed words (desc)
+    for _ in range(len(remaining)):
+        # re-sort by connectivity each iteration
+        remaining.sort(key=lambda w: (_connectivity_score(w, placed_words), rng.random()), reverse=True)
+        w = remaining.pop(0)
+
+        candidates = []
+        for ex in placed_words:
+            for i, wch in enumerate(w):
+                for j, ech in enumerate(ex.word):
+                    if wch != ech:
+                        continue
+                    if ex.direction == "across":
+                        nr, nc, dirn = ex.start_row - i, ex.start_col + j, "down"
+                    else:
+                        nr, nc, dirn = ex.start_row + j, ex.start_col - i, "across"
+                    if can_place_word_strict(grid, w, nr, nc, dirn, grid_size, require_overlap=True):
+                        center_bias = -(abs(nr - grid_size//2) + abs(nc - grid_size//2))
+                        mid_score = -(abs(i - len(w)//2) + abs(j - len(ex.word)//2))
+                        score = mid_score + center_bias
+                        candidates.append((score, rng.random(), nr, nc, dirn))
+
+        candidates.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        placed = False
+        for score, _tb, nr, nc, dirn in candidates:  # try ALL
+            if can_place_word_strict(grid, w, nr, nc, dirn, grid_size, require_overlap=True):
+                place_word_in_grid(grid, w, nr, nc, dirn)
+                placed_words.append(
+                    CrosswordWord(
+                        word=w,
+                        clue_original=word_data[w]["clue_original"],
+                        clue_english=word_data[w]["clue_english"],
+                        hints=word_data[w]["hints"],
+                        difficulty=word_data[w]["difficulty"],
+                        start_row=nr,
+                        start_col=nc,
+                        direction=dirn,
+                        number=next_number,
+                    )
+                )
+                next_number += 1
+                placed = True
+                break
+        if not placed:
+            # couldn't place this one now; push it back to the end and try others first
+            remaining.append(w)
+
+    return len(placed_words), grid, placed_words
+
+def create_crossword_grid(word_data: Dict, date: str, language: str) -> Tuple[List[List[str]], List[CrosswordWord]]:
+    """
+    Multi-attempt deterministic placer:
+      - Try several different anchor choices
+      - Prefer layouts that place the most words
+      - If best < 7 placed, retry with a different anchor order & slight score jitter
+    """
+    words: List[str] = list(word_data.keys())
+    grid_size = 22
+    rng_base = random.Random(f"{date}:{language}:place")
+
+    best_result = (0, None, None)  # (placed_count, grid, placed_words)
+
+    # Try up to K different anchors (first K words)
+    K = min(5, len(words))  # try top 5 as starting anchors
+    for k in range(K):
+        # make a per-attempt RNG (deterministic)
+        rng = random.Random(f"{date}:{language}:place:{k}")
+        placed_count, grid, placed_words = _try_layout(words, word_data, date, language, grid_size, k, rng)
+        if placed_count > best_result[0]:
+            best_result = (placed_count, grid, placed_words)
+
+    placed_count, grid, placed_words = best_result
+
+    # Guard: if too few placed, retry with a different deterministic “jitter”
+    if placed_count < 7:
+        for k in range(K, K + 4):  # a few more tries with different seeds
+            rng = random.Random(f"{date}:{language}:place:jitter:{k}")
+            # also rotate input words so a different candidate becomes the early anchor
+            rotated = words[k % len(words):] + words[:k % len(words)]
+            pc, g2, pw2 = _try_layout(rotated, word_data, date, language, grid_size, 0, rng)
+            if pc > placed_count:
+                placed_count, grid, placed_words = pc, g2, pw2
+            if placed_count >= 7:
+                break
+
+    print(f"📊 Placed {placed_count}/{len(words)} words")
+    return grid, placed_words
+
+
+# (Optional) Fallback kept for debugging, not used by the endpoint
+def create_crossword_grid_fallback(word_data: Dict) -> Tuple[List[List[str]], List[CrosswordWord]]:
+    words = list(word_data.keys())
+    grid_size = 25
+    grid = [["." for _ in range(grid_size)] for _ in range(grid_size)]
+    placed_words: List[CrosswordWord] = []
+
+    first = words[0]
+    r0, c0 = grid_size // 2, (grid_size - len(first)) // 2
+    place_word_in_grid(grid, first, r0, c0, "across")
+    placed_words.append(
+        CrosswordWord(
+            word=first,
+            clue_original=word_data[first]["clue_original"],
+            clue_english=word_data[first]["clue_english"],
+            hints=word_data[first]["hints"],
+            difficulty=word_data[first]["difficulty"],
+            start_row=r0,
+            start_col=c0,
+            direction="across",
+            number=1,
+        )
+    )
+    num = 2
+
+    for w in words[1:]:
+        done = False
+        for ex in placed_words:
+            if done:
+                break
+            for i, wch in enumerate(w):
+                for j, ech in enumerate(ex.word):
+                    if wch != ech:
+                        continue
+                    if ex.direction == "across":
+                        nr, nc, dirn = ex.start_row - i, ex.start_col + j, "down"
+                    else:
+                        nr, nc, dirn = ex.start_row + j, ex.start_col - i, "across"
+                    if can_place_word_strict(grid, w, nr, nc, dirn, grid_size, require_overlap=True):
+                        place_word_in_grid(grid, w, nr, nc, dirn)
+                        placed_words.append(
+                            CrosswordWord(
+                                word=w,
+                                clue_original=word_data[w]["clue_original"],
+                                clue_english=word_data[w]["clue_english"],
+                                hints=word_data[w]["hints"],
+                                difficulty=word_data[w]["difficulty"],
+                                start_row=nr,
+                                start_col=nc,
+                                direction=dirn,
+                                number=num,
+                            )
+                        )
+                        num += 1
+                        done = True
+                        print(f"Fallback placed '{w}'")
+                        break
+    print(f"Fallback: {len(placed_words)}/{len(words)} words")
+    return grid, placed_words
+
+# ─── Daily puzzle cache ─────────────────────────────────────────
+CACHE_DIR = Path("./daily_crossword_cache")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _cache_key(date: str, language: str) -> str:
+    return f"{date}:{language}"
+
+def _cache_path(date: str, language: str) -> Path:
+    # stable filename
+    h = hashlib.sha256(_cache_key(date, language).encode()).hexdigest()[:16]
+    return CACHE_DIR / f"{language}_{date}_{h}.json"
+
+def load_cached_puzzle(date: str, language: str) -> dict | None:
+    p = _cache_path(date, language)
+    if p.exists():
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+def save_cached_puzzle(date: str, language: str, puzzle_dict: dict) -> None:
+    p = _cache_path(date, language)
+    try:
+        with p.open("w", encoding="utf-8") as f:
+            json.dump(puzzle_dict, f, ensure_ascii=False)
+    except Exception:
+        pass
+
 @app.post("/crossword/daily")
 async def get_daily_crossword(body: CrosswordRequest):
-    """Get or generate daily crossword puzzle"""
-    
+    """Get daily crossword (cached per date+language)."""
     try:
-        print(f"🧩 Crossword request - UID: {body.uid}, Date: {body.date}, Language: {body.language}")
-        
-        # 1. Select words for the day
-        words = select_daily_words(body.language, body.date)
-        print(f"📝 Selected words: {words}")
-        
-        # 2. Generate clues and hints
+        # 1) Serve from cache if available
+        cached = load_cached_puzzle(body.date, body.language)
+        if cached:
+            print(f"Cache hit for {body.date} / {body.language}")
+            return cached
+
+        # 2) Generate fresh
+        words = await generate_crossword_vocabulary(body.language, body.date)
         word_data = await generate_crossword_clues(words, body.language)
-        print(f"🎯 Generated clues for {len(word_data)} words")
-        
-        # 3. Create crossword grid
-        grid, placed_words = create_crossword_grid(word_data)
-        print(f"🎲 Placed {len(placed_words)} words in grid")
-        
-        # 4. Return puzzle
+
+        # NOTE: use deterministic placer you already installed
+        grid, placed_words = create_crossword_grid(word_data, body.date, body.language)
+        print(f"Final: {len(placed_words)} words")
+
+        # Normalize + trim for clean UI rendering
+        grid = normalize_grid_chars(grid)
+        trimmed_grid, off_r, off_c = trim_grid(grid)
+
+        for w in placed_words:
+            w.start_row -= off_r
+            w.start_col -= off_c
+
         puzzle = CrosswordPuzzle(
             id=f"{body.date}_{body.language}",
             date=body.date,
             language=body.language,
             words=placed_words,
-            grid_size=[len(grid), len(grid[0])],
-            grid=grid
+            grid_size=[len(trimmed_grid), len(trimmed_grid[0])],
+            grid=trimmed_grid,
         )
-        
-        return puzzle.dict()
-        
+        puzzle_dict = puzzle.dict()
+
+        # 3) Save to cache
+        save_cached_puzzle(body.date, body.language, puzzle_dict)
+
+        # 4) Return
+        return puzzle_dict
+
     except Exception as e:
-        print(f"❌ Crossword generation error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Failed to generate crossword: {str(e)}"}
-        )
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})

@@ -1030,84 +1030,66 @@ For adjectives, adapt the categories appropriately.
 
 CROSSWORD_PROMPTS = {
     "japanese": """
-You are a Japanese crossword puzzle creator. Generate crossword clues and hints for the provided Japanese words.
+You are a Japanese crossword puzzle creator. Generate clues for these HIRAGANA words.
 
-Words to create clues for: {words}
+Words: {words}
 
-For each word, create:
-1. A crossword clue in Japanese (short, cryptic newspaper style)
-2. A crossword clue in English (short, cryptic newspaper style) 
-3. Two helpful hints in English that give context without being direct translations
-4. Determine the JLPT difficulty level
-
-CROSSWORD CLUE GUIDELINES:
-- Keep clues short (3-8 words)
-- Use wordplay, synonyms, or cultural references
-- Avoid direct translations or definitions
-- Make them challenging but solvable
-- Think like a newspaper crossword
+For each word, create SHORT cryptic clues (5-10 words max):
 
 EXAMPLES:
-For "猫" (cat):
-- Japanese clue: "にゃあと鳴く動物" (Animal that says meow)
-- English clue: "Feline that purrs"
-- Hints: ["Often kept as pets", "Chases mice"]
 
-For "勉強" (study):
-- Japanese clue: "試験の準備" (Exam preparation)  
-- English clue: "Hit the books"
-- Hints: ["What students do before tests", "Learning activity"]
+For "みる" (3 chars, N5):
+- Japanese clue: "目で確認すること"
+- English clue: "Use eyes to observe"
+- Hints: ["What you do with movies", "Requires vision"]
+- Difficulty: "N5"
 
-Return ONLY valid JSON:
+For "たべる" (4 chars, N5):
+- Japanese clue: "口に食べ物を入れる動作"
+- English clue: "What you do at dinner"
+- Hints: ["Involves chopsticks", "Three times daily"]
+- Difficulty: "N5"
+
+Return ONLY valid JSON (no markdown):
 {{
-  "word1": {{
-    "clue_original": "Japanese clue here",
-    "clue_english": "English clue here",
-    "hints": ["hint 1", "hint 2"],
+  "みる": {{
+    "clue_original": "目で確認すること",
+    "clue_english": "Use eyes to observe",
+    "hints": ["What you do with movies", "Requires vision"],
     "difficulty": "N5"
-  }},
-  "word2": {{ ... }}
+  }}
 }}
 """,
 
     "korean": """
-You are a Korean crossword puzzle creator. Generate crossword clues and hints for the provided Korean words.
+You are a Korean crossword puzzle creator. Generate clues for these Korean words.
 
-Words to create clues for: {words}
+Words: {words}
 
-For each word, create:
-1. A crossword clue in Korean (short, cryptic newspaper style)
-2. A crossword clue in English (short, cryptic newspaper style)
-3. Two helpful hints in English that give context without being direct translations  
-4. Determine the TOPIK difficulty level
-
-CROSSWORD CLUE GUIDELINES:
-- Keep clues short (3-8 words)
-- Use wordplay, synonyms, or cultural references
-- Avoid direct translations or definitions
-- Make them challenging but solvable
-- Think like a newspaper crossword
+For each word, create SHORT cryptic clues (5-10 words max):
 
 EXAMPLES:
-For "개" (dog):
-- Korean clue: "충실한 동물" (Loyal animal)
-- English clue: "Man's best friend"
-- Hints: ["Barks and wags tail", "Popular pet"]
 
-For "공부" (study):
-- Korean clue: "시험 준비" (Exam preparation)
-- English clue: "Hit the books"  
-- Hints: ["What students do", "Learning process"]
+For "하다" (3 chars, TOPIK1):
+- Korean clue: "무엇인가를 실행하는 행위"
+- English clue: "Perform an action"
+- Hints: ["Most common verb", "Opposite of not doing"]
+- Difficulty: "TOPIK1"
 
-Return ONLY valid JSON:
+For "먹다" (3 chars, TOPIK1):
+- Korean clue: "입에 음식을 넣는 행동"
+- English clue: "What you do at meals"
+- Hints: ["Requires food", "Three times daily"]
+- Difficulty: "TOPIK1"
+
+Return ONLY valid JSON (no markdown):
 {{
-  "word1": {{
-    "clue_original": "Korean clue here",
-    "clue_english": "English clue here", 
-    "hints": ["hint 1", "hint 2"],
+  "하다": {{
+    "clue_original": "무엇인가를 실행하는 행위",
+    "clue_english": "Perform an action",
+    "hints": ["Most common verb", "Opposite of not doing"],
     "difficulty": "TOPIK1"
-  }},
-  "word2": {{ ... }}
+  }}
 }}
 """
 }
