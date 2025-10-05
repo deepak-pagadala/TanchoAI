@@ -1783,13 +1783,18 @@ async def generate_crossword_vocabulary(language: str, date: str) -> List[str]:
                 messages=[
                     {"role": "system", "content": "Generate REAL, COMMON words. First and last MUST differ. No particles."},
                     {"role": "user", "content": (
-                        f"Generate EXACTLY 3 {('Japanese (hiragana)' if language=='japanese' else 'Korean')} starter words for a crossword.\n"
-                        "Rules:\n"
-                        "- length 4-6 (for Korean: 4-6 syllables)\n"
-                        "- first and last must differ\n"
-                        "- common words only\n"
-                        "- ensure the 3 words share at least one MIDDLE character/syllable among them (not the first/last)\n"
-                        'Return ONLY JSON: {"words": ["w1","w2","w3"]}'
+                        # In generate_crossword_vocabulary, update the initial 3-word request:
+f"Generate EXACTLY 3 SIMPLE, BASIC {('Japanese (hiragana)' if language=='japanese' else 'Korean')} words.\n"
+"CRITICAL RULES:\n"
+"- SINGLE SIMPLE WORDS ONLY - NO compound nouns, NO phrases, NO spaces\n"
+"- Length: {('3-5 hiragana characters' if language=='japanese' else '2-4 hangul syllables')}\n"
+"- Examples of GOOD words:\n"
+f"  {('- みず (water), はな (flower), かぜ (wind)' if language=='japanese' else '- 학교 (school), 친구 (friend), 음식 (food)')}\n"
+"- Examples of BAD words (too complex):\n"
+f"  {('- ひらがなもじ (hiragana letters) - TOO LONG' if language=='japanese' else '- 도서관장 (library director), 영화관람 (movie viewing) - TOO COMPLEX')}\n"
+"- First character must differ from last character\n"
+"- Must be extremely common, everyday words a beginner would know\n"
+'Return ONLY JSON: {{"words": ["word1","word2","word3"]}}'
                     )},
                 ],
                 temperature=0.7 + 0.05 * attempt,
@@ -1879,9 +1884,10 @@ Generate {batch_size} MORE {('Japanese (hiragana)' if language=='japanese' else 
 
 Rules:
 1) Return EXACTLY {batch_size} words
-2) Length 3-8 (for Korean: 3-8 syllables)
-3) First and last must differ
-4) REAL, common words only (no particles)
+2) SINGLE WORDS ONLY - NO SPACES - Must be single compound words
+3) Length 3-8 characters/syllables
+4) First and last must differ
+5) REAL, common single words only (no particles, no multi-word phrases)
 5) EACH new word MUST share at least ONE MIDDLE character/syllable with an existing word (not first/last)
 
 Existing words middle characters/syllables:
@@ -1956,6 +1962,12 @@ def validate_words(words: List[str], language: str, min_len: int = 3, max_len: i
         if not isinstance(w, str):
             continue
         w = w.strip()
+        
+        # ✅ REJECT WORDS WITH SPACES
+        if ' ' in w:
+            print(f"Rejected '{w}' - contains space")
+            continue
+            
         if not (min_len <= len(w) <= max_len):
             continue
         if enforce_diff_ends and len(w) >= 2 and w[0] == w[-1]:

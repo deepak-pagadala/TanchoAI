@@ -1062,32 +1062,34 @@ Return ONLY valid JSON (no markdown):
 """,
 
     "korean": """
-You are a Korean crossword puzzle creator. Generate clues for these Korean words.
+You are a Korean crossword puzzle creator. Generate clues for these SINGLE COMPOUND KOREAN WORDS (NO SPACES).
 
 Words: {words}
+
+CRITICAL: Each word must be a SINGLE compound word with NO SPACES.
 
 For each word, create SHORT cryptic clues (5-10 words max):
 
 EXAMPLES:
 
-For "하다" (3 chars, TOPIK1):
-- Korean clue: "무엇인가를 실행하는 행위"
-- English clue: "Perform an action"
-- Hints: ["Most common verb", "Opposite of not doing"]
+For "경기" (2 chars, TOPIK1):
+- Korean clue: "스포츠나 게임을 하는 것"
+- English clue: "Competition in sports"
+- Hints: ["Involves teams", "Winners and losers"]
 - Difficulty: "TOPIK1"
 
-For "먹다" (3 chars, TOPIK1):
-- Korean clue: "입에 음식을 넣는 행동"
-- English clue: "What you do at meals"
-- Hints: ["Requires food", "Three times daily"]
+For "여행" (2 chars, TOPIK1):
+- Korean clue: "다른 곳으로 가는 것"
+- English clue: "Going to another place"
+- Hints: ["Vacation activity", "Requires transportation"]
 - Difficulty: "TOPIK1"
 
 Return ONLY valid JSON (no markdown):
 {{
-  "하다": {{
-    "clue_original": "무엇인가를 실행하는 행위",
-    "clue_english": "Perform an action",
-    "hints": ["Most common verb", "Opposite of not doing"],
+  "경기": {{
+    "clue_original": "스포츠나 게임을 하는 것",
+    "clue_english": "Competition in sports",
+    "hints": ["Involves teams", "Winners and losers"],
     "difficulty": "TOPIK1"
   }}
 }}
