@@ -2472,3 +2472,179 @@ async def get_daily_crossword(body: CrosswordRequest):
         import traceback
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+# Add these models and endpoint to your main.py
+
+# ===============================================================
+# 8. Word-a-thon (Wordle-like) endpoint
+# ===============================================================
+
+class WordathonRequest(BaseModel):
+    uid: str
+    date: str
+    language: Literal["japanese", "korean"] = "japanese"
+
+class WordathonResponse(BaseModel):
+    id: str
+    date: str
+    language: str
+    target_word: str
+    word_length: int
+    max_attempts: int
+
+# Word-a-thon cache
+WORDATHON_CACHE_DIR = Path("./daily_wordathon_cache")
+WORDATHON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _wordathon_cache_path(date: str, language: str) -> Path:
+    h = hashlib.sha256(f"{date}:{language}:wordathon".encode()).hexdigest()[:16]
+    return WORDATHON_CACHE_DIR / f"wordathon_{language}_{date}_{h}.json"
+
+def load_cached_wordathon(date: str, language: str) -> dict | None:
+    p = _wordathon_cache_path(date, language)
+    if p.exists():
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+def save_cached_wordathon(date: str, language: str, word_dict: dict) -> None:
+    p = _wordathon_cache_path(date, language)
+    try:
+        with p.open("w", encoding="utf-8") as f:
+            json.dump(word_dict, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+async def generate_wordathon_word(language: str, date: str) -> str:
+    """Generate a 5-letter word for Word-a-thon game"""
+    rng = random.Random(f"{date}:{language}:wordathon")
+    
+    # Different constraints for each language
+    if language == "japanese":
+        constraints = """
+Generate EXACTLY ONE 5-character HIRAGANA word for a word guessing game.
+
+CRITICAL REQUIREMENTS:
+- EXACTLY 5 hiragana characters (not 4, not 6, exactly 5)
+- ONLY hiragana - NO kanji, NO katakana, NO romaji
+- REAL Japanese word that exists in dictionaries
+- Common enough that intermediate learners would know it
+- NO particles, NO verb endings (like -た, -る)
+- NO proper nouns or place names
+
+EXAMPLES OF GOOD WORDS:
+- あかり (light) - 5 characters ✓
+- さくら (cherry blossom) - 3 characters ✗ too short
+- はじめ (beginning) - 3 characters ✗ too short  
+- わかば (young leaves) - 3 characters ✗ too short
+- おかえり (welcome back) - 5 characters ✓
+
+Return ONLY the hiragana word, nothing else.
+"""
+    else:  # Korean
+        constraints = """
+Generate EXACTLY ONE 5-syllable Korean word for a word guessing game.
+
+CRITICAL REQUIREMENTS:
+- EXACTLY 5 hangul syllables (not 4, not 6, exactly 5)
+- ONLY hangul characters
+- REAL Korean word that exists in dictionaries  
+- Common enough that intermediate learners would know it
+- NO particles, NO verb endings
+- NO proper nouns or place names
+- Single compound word (no spaces)
+
+EXAMPLES OF GOOD WORDS:
+- 학교에서 - 4 syllables ✗ too short
+- 컴퓨터가 - 4 syllables ✗ too short
+- 도서관에 - 4 syllables ✗ too short
+- 운동경기 - 4 syllables ✗ too short
+- 친구들과 - 4 syllables ✗ too short
+
+Return ONLY the hangul word, nothing else.
+"""
+    
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        try:
+            resp = await client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": "You are a language game word generator. Return ONLY the word."},
+                    {"role": "user", "content": constraints}
+                ],
+                temperature=0.8 + attempt * 0.1,
+                max_tokens=20
+            )
+            
+            word = resp.choices[0].message.content.strip()
+            
+            # Clean the word
+            word = word.replace('"', '').replace("'", "").replace(".", "").strip()
+            
+            # Validate length
+            if len(word) == 5:
+                print(f"✅ Generated Word-a-thon word: '{word}' (attempt {attempt + 1})")
+                return word
+            else:
+                print(f"❌ Word '{word}' has {len(word)} characters, need exactly 5 (attempt {attempt + 1})")
+                
+        except Exception as e:
+            print(f"⚠️ Word generation attempt {attempt + 1} failed: {e}")
+    
+    # Fallback words
+    fallback_words = {
+        "japanese": [
+            "あした", "きょう", "ばんごはん", "あさごはん", "ひるごはん",
+            "てんき", "あめ", "ゆき", "かぜ", "そら",
+            "いえ", "がっこう", "しごと", "でんしゃ", "じてんしゃ"
+        ],
+        "korean": [
+            "학교에서", "친구들과", "컴퓨터를", "도서관에", "운동경기",
+            "음식점에", "영화관에", "백화점에", "지하철로", "버스정류"
+        ]
+    }
+    
+    # Pick a fallback deterministically 
+    fallbacks = fallback_words.get(language, fallback_words["japanese"])
+    fallback = fallbacks[rng.randint(0, len(fallbacks) - 1)]
+    print(f"🔄 Using fallback word: '{fallback}'")
+    return fallback
+
+@app.post("/wordathon/daily")
+async def get_daily_wordathon(body: WordathonRequest):
+    """Get daily Word-a-thon puzzle (cached per date+language)"""
+    try:
+        # 1) Check cache first
+        cached = load_cached_wordathon(body.date, body.language)
+        if cached:
+            print(f"💾 Word-a-thon cache hit for {body.date} / {body.language}")
+            return cached
+        
+        # 2) Generate fresh word
+        target_word = await generate_wordathon_word(body.language, body.date)
+        
+        # 3) Create response
+        response = {
+            "id": f"wordathon_{body.date}_{body.language}",
+            "date": body.date,
+            "language": body.language,
+            "target_word": target_word.upper(),
+            "word_length": 5,
+            "max_attempts": 6
+        }
+        
+        # 4) Cache the result
+        save_cached_wordathon(body.date, body.language, response)
+        
+        print(f"✅ Generated Word-a-thon: {target_word} for {body.date}/{body.language}")
+        return response
+        
+    except Exception as e:
+        print(f"❌ Word-a-thon error: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
