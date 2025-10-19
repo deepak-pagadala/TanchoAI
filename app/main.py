@@ -2517,9 +2517,8 @@ def save_cached_wordathon(date: str, language: str, word_dict: dict) -> None:
             json.dump(word_dict, f, ensure_ascii=False)
     except Exception:
         pass
-
-async def generate_wordathon_word(language: str, date: str) -> str:
-    """Generate a 5-letter word for Word-a-thon game"""
+async def generate_wordathon_word(language: str, date: str) -> dict:
+    """Generate a 5-letter word with meaning for Word-a-thon game - NO FALLBACKS"""
     rng = random.Random(f"{date}:{language}:wordathon")
     
     # Different constraints for each language
@@ -2529,6 +2528,7 @@ Generate EXACTLY ONE 5-character HIRAGANA word for a word guessing game.
 
 CRITICAL REQUIREMENTS:
 - EXACTLY 5 hiragana characters (not 4, not 6, exactly 5)
+- NO DUPLICATE CHARACTERS - each character must be unique
 - ONLY hiragana - NO kanji, NO katakana, NO romaji
 - REAL Japanese word that exists in dictionaries
 - Common enough that intermediate learners would know it
@@ -2536,13 +2536,21 @@ CRITICAL REQUIREMENTS:
 - NO proper nouns or place names
 
 EXAMPLES OF GOOD WORDS:
-- あかり (light) - 5 characters ✓
-- さくら (cherry blossom) - 3 characters ✗ too short
-- はじめ (beginning) - 3 characters ✗ too short  
-- わかば (young leaves) - 3 characters ✗ too short
-- おかえり (welcome back) - 5 characters ✓
+- べんきょう (study) - 5 characters: べ/ん/き/ょ/う - all unique ✓
+- とうきょう (Tokyo) - 5 characters
+- くもりそら (cloudy sky) - 5 characters
 
-Return ONLY the hiragana word, nothing else.
+EXAMPLES OF BAD WORDS:
+- さくら (cherry blossom) - has 'ら' twice âœ—
+- たべる (to eat) - verb ending âœ—
+- せんせい (teacher) - 4 characters: せ/ん/せ/い - HAS DUPLICATE せ
+
+
+Return ONLY JSON in this format:
+{
+  "word": "hiragana word here",
+  "meaning": "English meaning here"
+}
 """
     else:  # Korean
         constraints = """
@@ -2550,69 +2558,77 @@ Generate EXACTLY ONE 5-syllable Korean word for a word guessing game.
 
 CRITICAL REQUIREMENTS:
 - EXACTLY 5 hangul syllables (not 4, not 6, exactly 5)
+- NO DUPLICATE SYLLABLES - each syllable must be unique  
 - ONLY hangul characters
-- REAL Korean word that exists in dictionaries  
+- REAL Korean word that exists in dictionaries
 - Common enough that intermediate learners would know it
 - NO particles, NO verb endings
 - NO proper nouns or place names
 - Single compound word (no spaces)
 
 EXAMPLES OF GOOD WORDS:
-- 학교에서 - 4 syllables ✗ too short
-- 컴퓨터가 - 4 syllables ✗ too short
-- 도서관에 - 4 syllables ✗ too short
-- 운동경기 - 4 syllables ✗ too short
-- 친구들과 - 4 syllables ✗ too short
+- 컴퓨터게임 - 5 unique syllables
+- 백화점구경  - 5 unique syllables 
+- 축구경기장  - 5 unique syllables
 
-Return ONLY the hangul word, nothing else.
+EXAMPLES OF BAD WORDS:
+- 학교학교 (school school) - has duplicate syllables
+- 먹었어요 (ate) - verb ending
+- 서울시장 (Seoul mayor) - proper noun
+
+Return ONLY JSON in this format:
+{
+  "word": "hangul word here",
+  "meaning": "English meaning here"
+}
 """
     
-    max_attempts = 10
+    max_attempts = 30  # Increased from 15 to 30
     for attempt in range(max_attempts):
         try:
             resp = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
-                    {"role": "system", "content": "You are a language game word generator. Return ONLY the word."},
+                    {"role": "system", "content": "You are a language game word generator. Return ONLY valid JSON with a word and its meaning."},
                     {"role": "user", "content": constraints}
                 ],
-                temperature=0.8 + attempt * 0.1,
-                max_tokens=20
+                temperature=0.7 + attempt * 0.02,  # Gradually increase creativity
+                max_tokens=100,
+                response_format={"type": "json_object"}
             )
             
-            word = resp.choices[0].message.content.strip()
+            result_text = resp.choices[0].message.content.strip()
             
-            # Clean the word
-            word = word.replace('"', '').replace("'", "").replace(".", "").strip()
+            # Clean markdown if present
+            if result_text.startswith('```json'):
+                result_text = result_text[7:]
+            if result_text.endswith('```'):
+                result_text = result_text[:-3]
+            result_text = result_text.strip()
             
-            # Validate length
-            if len(word) == 5:
-                print(f"✅ Generated Word-a-thon word: '{word}' (attempt {attempt + 1})")
-                return word
+            result = json.loads(result_text)
+            word = result.get("word", "").strip()
+            meaning = result.get("meaning", "").strip()
+            
+            # Validate length and uniqueness
+            if len(word) == 5 and len(set(word)) == 5 and meaning:
+                print(f"âœ… Generated Word-a-thon: '{word}' = '{meaning}' (attempt {attempt + 1})")
+                return {"word": word, "meaning": meaning}
             else:
-                print(f"❌ Word '{word}' has {len(word)} characters, need exactly 5 (attempt {attempt + 1})")
-                
+                if len(word) != 5:
+                    print(f"âŒ Attempt {attempt + 1}: Word '{word}' has {len(word)} characters, need exactly 5")
+                elif len(set(word)) != 5:
+                    print(f"âŒ Attempt {attempt + 1}: Word '{word}' has duplicate characters: {word}")
+                else:
+                    print(f"âŒ Attempt {attempt + 1}: Missing meaning for word '{word}'")
+                    
         except Exception as e:
-            print(f"⚠️ Word generation attempt {attempt + 1} failed: {e}")
+            print(f"âš ï¸ Word generation attempt {attempt + 1} failed: {e}")
     
-    # Fallback words
-    fallback_words = {
-        "japanese": [
-            "あした", "きょう", "ばんごはん", "あさごはん", "ひるごはん",
-            "てんき", "あめ", "ゆき", "かぜ", "そら",
-            "いえ", "がっこう", "しごと", "でんしゃ", "じてんしゃ"
-        ],
-        "korean": [
-            "학교에서", "친구들과", "컴퓨터를", "도서관에", "운동경기",
-            "음식점에", "영화관에", "백화점에", "지하철로", "버스정류"
-        ]
-    }
-    
-    # Pick a fallback deterministically 
-    fallbacks = fallback_words.get(language, fallback_words["japanese"])
-    fallback = fallbacks[rng.randint(0, len(fallbacks) - 1)]
-    print(f"🔄 Using fallback word: '{fallback}'")
-    return fallback
+    # If we get here after 30 attempts, raise an error
+    error_msg = f"Failed to generate valid Word-a-thon word after {max_attempts} attempts"
+    print(f"âŒ {error_msg}")
+    raise Exception(error_msg)
 
 @app.post("/wordathon/daily")
 async def get_daily_wordathon(body: WordathonRequest):
@@ -2621,18 +2637,19 @@ async def get_daily_wordathon(body: WordathonRequest):
         # 1) Check cache first
         cached = load_cached_wordathon(body.date, body.language)
         if cached:
-            print(f"💾 Word-a-thon cache hit for {body.date} / {body.language}")
+            print(f"ðŸ'¾ Word-a-thon cache hit for {body.date} / {body.language}")
             return cached
         
-        # 2) Generate fresh word
-        target_word = await generate_wordathon_word(body.language, body.date)
+        # 2) Generate fresh word with meaning (NO FALLBACK)
+        word_data = await generate_wordathon_word(body.language, body.date)
         
         # 3) Create response
         response = {
             "id": f"wordathon_{body.date}_{body.language}",
             "date": body.date,
             "language": body.language,
-            "target_word": target_word.upper(),
+            "target_word": word_data["word"],
+            "word_meaning": word_data["meaning"],
             "word_length": 5,
             "max_attempts": 6
         }
@@ -2640,11 +2657,11 @@ async def get_daily_wordathon(body: WordathonRequest):
         # 4) Cache the result
         save_cached_wordathon(body.date, body.language, response)
         
-        print(f"✅ Generated Word-a-thon: {target_word} for {body.date}/{body.language}")
+        print(f"âœ… Generated Word-a-thon: {word_data['word']} ({word_data['meaning']}) for {body.date}/{body.language}")
         return response
         
     except Exception as e:
-        print(f"❌ Word-a-thon error: {e}")
+        print(f"âŒ Word-a-thon error: {e}")
         import traceback
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
