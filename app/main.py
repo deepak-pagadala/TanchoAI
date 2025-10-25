@@ -2496,6 +2496,53 @@ class WordathonResponse(BaseModel):
 WORDATHON_CACHE_DIR = Path("./daily_wordathon_cache")
 WORDATHON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---- Hangul → compatibility jamo helpers ----
+S_BASE, L_BASE, V_BASE, T_BASE = 0xAC00, 0x1100, 0x1161, 0x11A7
+L_COUNT, V_COUNT, T_COUNT = 19, 21, 28
+N_COUNT = V_COUNT * T_COUNT
+
+L_COMPAT = ["ㄱ","ㄲ","ㄴ","ㄷ","ㄸ","ㄹ","ㅁ","ㅂ","ㅃ","ㅅ","ㅆ","ㅇ","ㅈ","ㅉ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"]
+V_COMPAT = ["ㅏ","ㅐ","ㅑ","ㅒ","ㅓ","ㅔ","ㅕ","ㅖ","ㅗ","ㅘ","ㅙ","ㅚ","ㅛ","ㅜ","ㅝ","ㅞ","ㅟ","ㅠ","ㅡ","ㅢ","ㅣ"]
+T_COMPAT = ["","ㄱ","ㄲ","ㄳ","ㄴ","ㄵ","ㄶ","ㄷ","ㄹ","ㄺ","ㄻ","ㄼ","ㄽ","ㄾ","ㄿ","ㅀ","ㅁ","ㅂ","ㅄ","ㅅ","ㅆ","ㅇ","ㅈ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"]
+
+def _decompose_hangul_syllable_to_compat(ch: str):
+    code = ord(ch)
+    if not (0xAC00 <= code <= 0xD7A3):
+        return None
+    s_index = code - S_BASE
+    l_index = s_index // (N_COUNT)
+    v_index = (s_index % (N_COUNT)) // T_COUNT
+    t_index = s_index % T_COUNT
+    parts = [L_COMPAT[l_index], V_COMPAT[v_index]]
+    if t_index != 0:
+        parts.append(T_COMPAT[t_index])
+    return parts
+
+def hangul_to_compat_jamo(text: str):
+    out = []
+    for ch in text:
+        parts = _decompose_hangul_syllable_to_compat(ch)
+        if parts is not None:
+            out.extend(parts)
+        elif 0x3130 <= ord(ch) <= 0x318F:  # direct compatibility jamo
+            out.append(ch)
+        else:
+            # keep anything else as a single unit; we’ll reject it later
+            out.append(ch)
+    return out
+
+def korean_jamo_len(text: str) -> int:
+    return len(hangul_to_compat_jamo(text))
+
+def is_all_hangul_syllables(text: str) -> bool:
+    if not text or any(c.isspace() for c in text):
+        return False
+    for ch in text:
+        if not (0xAC00 <= ord(ch) <= 0xD7A3):  # composed Hangul syllables only
+            return False
+    return True
+
+
 def _wordathon_cache_path(date: str, language: str) -> Path:
     h = hashlib.sha256(f"{date}:{language}:wordathon".encode()).hexdigest()[:16]
     return WORDATHON_CACHE_DIR / f"wordathon_{language}_{date}_{h}.json"
@@ -2518,150 +2565,111 @@ def save_cached_wordathon(date: str, language: str, word_dict: dict) -> None:
     except Exception:
         pass
 async def generate_wordathon_word(language: str, date: str) -> dict:
-    """Generate a 5-letter word with meaning for Word-a-thon game - NO FALLBACKS"""
+    """
+    Generate a word for Word-a-thon.
+    - Japanese: EXACTLY 5 hiragana (unchanged)
+    - Korean: a single Hangul word whose TOTAL JAMO count is 4–6 (inclusive)
+    """
     rng = random.Random(f"{date}:{language}:wordathon")
-    
-    # Different constraints for each language
+
     if language == "japanese":
         constraints = """
-Generate EXACTLY ONE 5-character HIRAGANA word for a word guessing game.
+Return ONLY valid JSON.
 
-CRITICAL REQUIREMENTS:
-- EXACTLY 5 hiragana characters (not 4, not 6, exactly 5)
-- NO DUPLICATE CHARACTERS - each character must be unique
-- ONLY hiragana - NO kanji, NO katakana, NO romaji
-- REAL Japanese word that exists in dictionaries
-- Common enough that intermediate learners would know it
-- NO particles, NO verb endings (like -た, -る)
-- NO proper nouns or place names
+Task:
+- Generate EXACTLY ONE real Japanese word written ONLY in HIRAGANA.
+- EXACTLY 5 characters (not 4, not 6).
+- Reasonably common; intermediate learners should recognize it.
+- No particles-only forms, no bare verb inflections (e.g., ～た／～る only).
+- No proper nouns or place names.
 
-EXAMPLES OF GOOD WORDS:
-- べんきょう (study) - 5 characters: べ/ん/き/ょ/う - all unique ✓
-- とうきょう (Tokyo) - 5 characters
-- くもりそら (cloudy sky) - 5 characters
-
-EXAMPLES OF BAD WORDS:
-- さくら (cherry blossom) - has 'ら' twice âœ—
-- たべる (to eat) - verb ending âœ—
-- せんせい (teacher) - 4 characters: せ/ん/せ/い - HAS DUPLICATE せ
-
-
-Return ONLY JSON in this format:
-{
-  "word": "hiragana word here",
-  "meaning": "English meaning here"
-}
+Return JSON ONLY:
+{"word":"ひらがな5文字","meaning":"English meaning"}
 """
-    else:  # Korean
+    else:  # korean
         constraints = """
-Generate EXACTLY ONE 5-syllable Korean word for a word guessing game.
+Return ONLY valid JSON.
 
-CRITICAL REQUIREMENTS:
-- EXACTLY 5 hangul syllables (not 4, not 6, exactly 5)
-- NO DUPLICATE SYLLABLES - each syllable must be unique  
-- ONLY hangul characters
-- REAL Korean word that exists in dictionaries
-- Common enough that intermediate learners would know it
-- NO particles, NO verb endings
-- NO proper nouns or place names
-- Single compound word (no spaces)
+Task:
+- Generate EXACTLY ONE real Korean word written in composed Hangul syllables (no spaces).
+- The word's TOTAL number of JAMO (consonant+vowel+final consonant counts) must be BETWEEN 4 AND 6 inclusive.
+  * Example: "강" = ㄱ+ㅏ+ㅇ (3 jamo); "학교" = ㅎ+ㅏ+ㄱ + ㄱ+ㅛ (5 jamo).
+- Reasonably common; suitable for intermediate learners.
+- NO particles-only forms, NO pure verb endings, NO proper nouns/place names.
 
-EXAMPLES OF GOOD WORDS:
-- 컴퓨터게임 - 5 unique syllables
-- 백화점구경  - 5 unique syllables 
-- 축구경기장  - 5 unique syllables
-
-EXAMPLES OF BAD WORDS:
-- 학교학교 (school school) - has duplicate syllables
-- 먹었어요 (ate) - verb ending
-- 서울시장 (Seoul mayor) - proper noun
-
-Return ONLY JSON in this format:
-{
-  "word": "hangul word here",
-  "meaning": "English meaning here"
-}
+Return JSON ONLY:
+{"word":"한글단어","meaning":"English meaning"}
 """
-    
-    max_attempts = 30  # Increased from 15 to 30
+
+    max_attempts = 30
     for attempt in range(max_attempts):
         try:
             resp = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
-                    {"role": "system", "content": "You are a language game word generator. Return ONLY valid JSON with a word and its meaning."},
-                    {"role": "user", "content": constraints}
+                    {"role":"system","content":"You are a language game word generator. Return ONLY valid JSON with a word and its meaning."},
+                    {"role":"user","content":constraints}
                 ],
-                temperature=0.7 + attempt * 0.02,  # Gradually increase creativity
+                temperature=0.7 + attempt * 0.02,
                 max_tokens=100,
-                response_format={"type": "json_object"}
+                response_format={"type":"json_object"}
             )
-            
+
             result_text = resp.choices[0].message.content.strip()
-            
-            # Clean markdown if present
-            if result_text.startswith('```json'):
+            if result_text.startswith("```json"):
                 result_text = result_text[7:]
-            if result_text.endswith('```'):
+            if result_text.endswith("```"):
                 result_text = result_text[:-3]
-            result_text = result_text.strip()
-            
-            result = json.loads(result_text)
-            word = result.get("word", "").strip()
-            meaning = result.get("meaning", "").strip()
-            
-            # Validate length and uniqueness
-            if len(word) == 5 and len(set(word)) == 5 and meaning:
-                print(f"âœ… Generated Word-a-thon: '{word}' = '{meaning}' (attempt {attempt + 1})")
-                return {"word": word, "meaning": meaning}
+            data = json.loads(result_text)
+
+            word = (data.get("word") or "").strip()
+            meaning = (data.get("meaning") or "").strip()
+            if not word or not meaning:
+                continue
+
+            if language == "japanese":
+                # must be exactly 5 hiragana
+                if len(word) == 5 and all(0x3040 <= ord(c) <= 0x309F for c in word):
+                    return {"word": word, "meaning": meaning}
             else:
-                if len(word) != 5:
-                    print(f"âŒ Attempt {attempt + 1}: Word '{word}' has {len(word)} characters, need exactly 5")
-                elif len(set(word)) != 5:
-                    print(f"âŒ Attempt {attempt + 1}: Word '{word}' has duplicate characters: {word}")
-                else:
-                    print(f"âŒ Attempt {attempt + 1}: Missing meaning for word '{word}'")
-                    
+                # must be composed Hangul, jamo length 4–6
+                if is_all_hangul_syllables(word):
+                    jl = korean_jamo_len(word)
+                    if 4 <= jl <= 6:
+                        return {"word": word, "meaning": meaning}
+
         except Exception as e:
-            print(f"âš ï¸ Word generation attempt {attempt + 1} failed: {e}")
-    
-    # If we get here after 30 attempts, raise an error
-    error_msg = f"Failed to generate valid Word-a-thon word after {max_attempts} attempts"
-    print(f"âŒ {error_msg}")
-    raise Exception(error_msg)
+            print(f"⚠️ word gen attempt {attempt+1} failed: {e}")
+
+    raise Exception(f"Failed to generate valid Word-a-thon word after {max_attempts} attempts")
 
 @app.post("/wordathon/daily")
 async def get_daily_wordathon(body: WordathonRequest):
-    """Get daily Word-a-thon puzzle (cached per date+language)"""
     try:
-        # 1) Check cache first
         cached = load_cached_wordathon(body.date, body.language)
         if cached:
-            print(f"ðŸ'¾ Word-a-thon cache hit for {body.date} / {body.language}")
             return cached
-        
-        # 2) Generate fresh word with meaning (NO FALLBACK)
+
         word_data = await generate_wordathon_word(body.language, body.date)
-        
-        # 3) Create response
+
+        if body.language == "korean":
+            length_for_grid = korean_jamo_len(word_data["word"])   # 4–6
+        else:
+            length_for_grid = len(word_data["word"])               # 5 (JP)
+
         response = {
             "id": f"wordathon_{body.date}_{body.language}",
             "date": body.date,
             "language": body.language,
             "target_word": word_data["word"],
             "word_meaning": word_data["meaning"],
-            "word_length": 5,
+            "word_length": length_for_grid,
             "max_attempts": 6
         }
-        
-        # 4) Cache the result
+
         save_cached_wordathon(body.date, body.language, response)
-        
-        print(f"âœ… Generated Word-a-thon: {word_data['word']} ({word_data['meaning']}) for {body.date}/{body.language}")
         return response
-        
+
     except Exception as e:
-        print(f"âŒ Word-a-thon error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"✖ Word-a-thon error: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
