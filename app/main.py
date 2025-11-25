@@ -2491,6 +2491,8 @@ class WordathonResponse(BaseModel):
     target_word: str
     word_length: int
     max_attempts: int
+    word_meaning: str
+    word_clue: Optional[str] = None
 
 # Word-a-thon cache
 WORDATHON_CACHE_DIR = Path("./daily_wordathon_cache")
@@ -2564,11 +2566,13 @@ def save_cached_wordathon(date: str, language: str, word_dict: dict) -> None:
             json.dump(word_dict, f, ensure_ascii=False)
     except Exception:
         pass
+
 async def generate_wordathon_word(language: str, date: str) -> dict:
     """
     Generate a word for Word-a-thon.
-    - Japanese: EXACTLY 5 hiragana (unchanged)
+    - Japanese: EXACTLY 5 hiragana
     - Korean: a single Hangul word whose TOTAL JAMO count is 4–6 (inclusive)
+    Also returns a broad English clue so the word is guessable.
     """
     rng = random.Random(f"{date}:{language}:wordathon")
 
@@ -2583,8 +2587,17 @@ Task:
 - No particles-only forms, no bare verb inflections (e.g., ～た／～る only).
 - No proper nouns or place names.
 
-Return JSON ONLY:
-{"word":"ひらがな5文字","meaning":"English meaning"}
+Also provide:
+- A short, broad clue in SIMPLE ENGLISH.
+- The clue should describe the general category or situation (e.g. "It is a type of weather", "Something you eat for breakfast").
+- The clue MUST NOT contain the Japanese word, romaji, or kanji.
+
+Return JSON ONLY in this exact shape:
+{
+  "word": "ひらがな5もじ",
+  "meaning": "English meaning of the word",
+  "clue": "Broad English hint that does not give the word away"
+}
 """
     else:  # korean
         constraints = """
@@ -2597,8 +2610,16 @@ Task:
 - Reasonably common; suitable for intermediate learners.
 - NO particles-only forms, NO pure verb endings, NO proper nouns/place names.
 
-Return JSON ONLY:
-{"word":"한글단어","meaning":"English meaning"}
+Also provide:
+- A short, broad clue in SIMPLE ENGLISH.
+- The clue should describe the general topic (e.g. "A place related to study", "Something you drink") and MUST NOT contain the word or romanization.
+
+Return JSON ONLY in this exact shape:
+{
+  "word": "한국어단어",
+  "meaning": "English meaning of the word",
+  "clue": "Broad English hint that does not give the word away"
+}
 """
 
     max_attempts = 30
@@ -2607,12 +2628,19 @@ Return JSON ONLY:
             resp = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
-                    {"role":"system","content":"You are a language game word generator. Return ONLY valid JSON with a word and its meaning."},
-                    {"role":"user","content":constraints}
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a language game word generator. "
+                            "Return ONLY valid JSON with a word, its English meaning, "
+                            "and a broad English clue."
+                        ),
+                    },
+                    {"role": "user", "content": constraints},
                 ],
                 temperature=0.7 + attempt * 0.02,
-                max_tokens=100,
-                response_format={"type":"json_object"}
+                max_tokens=150,
+                response_format={"type": "json_object"},
             )
 
             result_text = resp.choices[0].message.content.strip()
@@ -2620,23 +2648,25 @@ Return JSON ONLY:
                 result_text = result_text[7:]
             if result_text.endswith("```"):
                 result_text = result_text[:-3]
+
             data = json.loads(result_text)
 
             word = (data.get("word") or "").strip()
             meaning = (data.get("meaning") or "").strip()
+            clue = (data.get("clue") or "").strip()
             if not word or not meaning:
                 continue
 
             if language == "japanese":
                 # must be exactly 5 hiragana
                 if len(word) == 5 and all(0x3040 <= ord(c) <= 0x309F for c in word):
-                    return {"word": word, "meaning": meaning}
+                    return {"word": word, "meaning": meaning, "clue": clue}
             else:
                 # must be composed Hangul, jamo length 4–6
                 if is_all_hangul_syllables(word):
                     jl = korean_jamo_len(word)
                     if 4 <= jl <= 6:
-                        return {"word": word, "meaning": meaning}
+                        return {"word": word, "meaning": meaning, "clue": clue}
 
         except Exception as e:
             print(f"⚠️ word gen attempt {attempt+1} failed: {e}")
@@ -2663,8 +2693,9 @@ async def get_daily_wordathon(body: WordathonRequest):
             "language": body.language,
             "target_word": word_data["word"],
             "word_meaning": word_data["meaning"],
+            "word_clue": word_data.get("clue", ""),
             "word_length": length_for_grid,
-            "max_attempts": 6
+            "max_attempts": 6,
         }
 
         save_cached_wordathon(body.date, body.language, response)
