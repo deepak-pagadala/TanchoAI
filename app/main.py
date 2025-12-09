@@ -719,6 +719,10 @@ class DictionaryRequest(BaseModel):
     uid: str
     word: str
     language: Literal["japanese", "korean"] = "japanese"
+    # "auto" = backend will auto-detect, "english" = input is English,
+    # "target_language" = input is JP/KR already
+    query_type: Literal["auto", "english", "target_language"] = "auto"
+
 
 class DictionaryResponse(BaseModel):
     word: str
@@ -736,8 +740,15 @@ class DictionaryResponse(BaseModel):
 # In-memory cache for dictionary lookups
 _dictionary_cache: Dict[str, Dict] = {}
 
-def _cache_key(word: str, language: str) -> str:
-    return f"{language}:{word.lower().strip()}"
+def _dict_cache_key(word: str, language: str, query_type: str = "auto") -> str:
+    """
+    Build a cache key for dictionary results.
+
+    We include query_type so that the same surface form (e.g. "happy")
+    can have different cache entries depending on whether it's being
+    interpreted as English input or as a target-language input.
+    """
+    return f"{language}:{query_type}:{word.lower().strip()}"
 
 def _increment_dictionary_stat(uid: str):
     """Increment user's dictionary lookup counter"""
@@ -751,8 +762,11 @@ def _increment_dictionary_stat(uid: str):
 
 @app.post("/dictionary", response_model=DictionaryResponse)
 async def dictionary_lookup(body: DictionaryRequest):
-    uid, word, language = body.uid, body.word.strip(), body.language
-    
+    uid = body.uid
+    word = body.word.strip()
+    language = body.language  # "japanese" or "korean"
+    query_type = body.query_type or "auto"
+
     if not word:
         return DictionaryResponse(
             word="",
@@ -760,122 +774,193 @@ async def dictionary_lookup(body: DictionaryRequest):
             error="Empty search query",
             meanings=[]
         )
-    
-    print(f"📚 Dictionary lookup - UID: {uid}, Language: {language}, Word: '{word}'")
-    
-    # Check cache first
-    cache_key = _cache_key(word, language)
+
+    # 🔍 If client didn’t specify, auto-detect English vs target language
+    if query_type == "auto":
+        def is_japanese_char(ch: str) -> bool:
+            code = ord(ch)
+            return (
+                0x3040 <= code <= 0x30FF or   # Hiragana & Katakana
+                0x4E00 <= code <= 0x9FFF      # CJK (Kanji)
+            )
+
+        def is_korean_char(ch: str) -> bool:
+            code = ord(ch)
+            return (
+                0x3130 <= code <= 0x318F or   # Hangul Jamo
+                0xAC00 <= code <= 0xD7AF      # Hangul syllables
+            )
+
+        if language == "japanese":
+            has_jp = any(is_japanese_char(c) for c in word)
+            query_type = "target_language" if has_jp else "english"
+        else:  # korean
+            has_kr = any(is_korean_char(c) for c in word)
+            query_type = "target_language" if has_kr else "english"
+
+    lang_label = "Japanese" if language == "japanese" else "Korean"
+
+    print(
+        f"📚 Dictionary lookup - UID: {uid}, "
+        f"Language: {language}, QueryType: {query_type}, Word: '{word}'"
+    )
+
+    # ✅ Cache includes query_type now
+    cache_key = _dict_cache_key(word, language, query_type)
     if cache_key in _dictionary_cache:
-        print(f"💾 Cache hit for: {word}")
+        print(f"💾 Cache hit for: {word} (query_type={query_type})")
         cached_result = _dictionary_cache[cache_key]
         _increment_dictionary_stat(uid)
         return DictionaryResponse(**cached_result)
-    
+
     try:
-        # Get the appropriate prompt template
-        prompt_template = DICTIONARY_PROMPTS.get(language, DICTIONARY_PROMPTS["japanese"])
-        prompt = prompt_template.format(word=word)
-        
-        # Call OpenAI with explicit JSON mode instructions
+        # Use existing language-specific template
+        prompt_template = DICTIONARY_PROMPTS.get(
+            language,
+            DICTIONARY_PROMPTS["japanese"]
+        )
+
+        # Base prompt (already contains "Word to analyze: {word}", etc.)
+        base_prompt = prompt_template.format(word=word)
+
+        # Extra metadata for the model about the query type
+        # We prepend this in the user message so the template remains reusable.
+        user_prompt = (
+            f"TARGET_LANGUAGE: {lang_label}\n"
+            f"QUERY_TYPE: {query_type}\n"
+            f"USER_INPUT: {word}\n\n"
+            + base_prompt
+        )
+
+        # System prompt: explain exactly how to treat English vs JP/KR
+        system_prompt = (
+            f"You are a {lang_label} dictionary API.\n"
+            "The client may send either:\n"
+            "- an English word (QUERY_TYPE='english')\n"
+            "- a word already in the target language "
+            "(QUERY_TYPE='target_language').\n\n"
+            "Rules:\n"
+            "1. QUERY_TYPE='english':\n"
+            f"   • Interpret USER_INPUT as an English word.\n"
+            f"   • Choose the most natural {lang_label} dictionary headword "
+            "for that meaning.\n"
+            "   • In the JSON output, the `word` field MUST be that "
+            "target-language headword (not English).\n"
+            "   • `meanings` stay as English glosses explaining the "
+            "target-language word.\n"
+            "2. QUERY_TYPE='target_language':\n"
+            "   • Treat USER_INPUT as already in the target language and "
+            "analyze it normally.\n\n"
+            "You MUST return exactly one valid JSON object that matches the "
+            "schema implied by the prompt. No markdown, no text before/after."
+        )
+
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {
-                    "role": "system", 
-                    "content": "You are a dictionary API. You MUST respond with valid JSON only. Do not use markdown formatting, code blocks, or any other formatting. Return raw JSON that can be parsed directly."
-                },
-                {
-                    "role": "user", 
-                    "content": prompt
-                }
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
             ],
-            temperature=0.1,  # Very low temperature for consistent JSON
+            temperature=0.1,
             max_tokens=1000,
-            response_format={"type": "json_object"}  # Force JSON mode
+            response_format={"type": "json_object"},
         )
-        
-        result_text = response.choices[0].message.content.strip()
+
+        result_text = (response.choices[0].message.content or "").strip()
         print(f"🤖 AI Response length: {len(result_text)} chars")
-        
-        # Clean up any potential markdown formatting
-        if result_text.startswith('```json'):
-            result_text = result_text[7:]  # Remove ```json
-        if result_text.endswith('```'):
-            result_text = result_text[:-3]  # Remove ```
-        
-        result_text = result_text.strip()
-        
-        # Additional cleaning - remove any remaining markdown
+
+        # Extra cleaning, just in case
         import re
         result_text = re.sub(r'^```\w*\n?', '', result_text)
         result_text = re.sub(r'\n?```$', '', result_text)
-        
+
         print(f"🧹 Cleaned response: {result_text[:100]}...")
-        
+
         try:
-            # Parse the JSON response
+            # First attempt: direct JSON parse
             result_data = json.loads(result_text)
-            
-            # Validate required fields
+
+            # Ensure required fields exist
             if "meanings" not in result_data:
                 result_data["meanings"] = []
             if "found" not in result_data:
                 result_data["found"] = len(result_data["meanings"]) > 0
-                
-            # Cache the successful result
+            if "example_sentences" not in result_data:
+                result_data["example_sentences"] = []
+            if "kanji_breakdown" not in result_data:
+                result_data["kanji_breakdown"] = None
+            if "hangul_breakdown" not in result_data:
+                result_data["hangul_breakdown"] = None
+            if "conjugations" not in result_data:
+                result_data["conjugations"] = None
+
             _dictionary_cache[cache_key] = result_data
-            
-            # Increment user stats
             _increment_dictionary_stat(uid)
-            
-            print(f"✅ Dictionary lookup successful for: {word}")
+
+            print(
+                f"✅ Dictionary lookup successful for: {word} "
+                f"(query_type={query_type})"
+            )
             return DictionaryResponse(**result_data)
-            
+
         except json.JSONDecodeError as e:
             print(f"❌ JSON parsing failed: {e}")
             print(f"Raw response: {result_text[:200]}...")
-            
-            # Try to extract JSON from malformed response
+
+            # Fallback: try to extract the first {...} block
             try:
-                # Look for JSON object boundaries
-                start = result_text.find('{')
-                end = result_text.rfind('}') + 1
-                
+                start = result_text.find("{")
+                end = result_text.rfind("}") + 1
                 if start >= 0 and end > start:
                     json_part = result_text[start:end]
-                    print(f"🔧 Attempting to parse extracted JSON: {json_part[:100]}...")
+                    print(
+                        f"🔧 Attempting to parse extracted JSON: "
+                        f"{json_part[:100]}..."
+                    )
                     result_data = json.loads(json_part)
-                    
-                    # Validate and cache
+
                     if "meanings" not in result_data:
                         result_data["meanings"] = []
                     if "found" not in result_data:
                         result_data["found"] = len(result_data["meanings"]) > 0
-                    
+                    if "example_sentences" not in result_data:
+                        result_data["example_sentences"] = []
+                    if "kanji_breakdown" not in result_data:
+                        result_data["kanji_breakdown"] = None
+                    if "hangul_breakdown" not in result_data:
+                        result_data["hangul_breakdown"] = None
+                    if "conjugations" not in result_data:
+                        result_data["conjugations"] = None
+
                     _dictionary_cache[cache_key] = result_data
                     _increment_dictionary_stat(uid)
-                    
-                    print(f"✅ Dictionary lookup successful after JSON extraction for: {word}")
+
+                    print(
+                        f"✅ Dictionary lookup successful after JSON "
+                        f"extraction for: {word}"
+                    )
                     return DictionaryResponse(**result_data)
-                    
+
             except json.JSONDecodeError:
                 pass
-            
+
+            # If everything fails, return an error object
             return DictionaryResponse(
                 word=word,
                 found=False,
                 error="Failed to parse dictionary response",
-                meanings=[]
+                meanings=[],
             )
-    
+
     except Exception as e:
         print(f"❌ Dictionary lookup failed: {e}")
         return DictionaryResponse(
             word=word,
             found=False,
             error=f"Dictionary service error: {str(e)}",
-            meanings=[]
+            meanings=[],
         )
+
     
 # Optional: Dictionary cache management endpoints
 @app.get("/dictionary/cache/stats")
