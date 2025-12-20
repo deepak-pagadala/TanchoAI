@@ -18,6 +18,8 @@ from fastapi import File, UploadFile, Form
 from fastapi.staticfiles import StaticFiles
 from datetime import datetime, timedelta, timezone
 import calendar, json, zoneinfo
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # ───────── external helper libs ──────────
 from langdetect import detect              # pip install langdetect
@@ -39,6 +41,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ───────── Firestore / Firebase setup ─────────
+try:
+    # If no app yet, initialize using Application Default Credentials (ADC)
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app()  # ← no JSON path here
+
+    _db = firestore.client()
+    print("✅ Firebase Admin / Firestore initialized")
+except Exception as e:
+    print(f"⚠️ Firebase Admin init failed: {e}")
+    _db = None
+
+CROSSWORD_COLLECTION = "crosswords"
+WORDATHON_COLLECTION = "wordathon_puzzles"
+
+
 # ── ensure ./app/static exists ──────────────────────────────────
 static_root = pathlib.Path(__file__).resolve().parent / "static"
 static_root.mkdir(parents=True, exist_ok=True)
@@ -47,13 +65,19 @@ static_root.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_root), name="static")
 
 # ───────── project-local helpers ─────────
-from app.dummy_store import (
+from .dummy_store import (
     get_history, write_turns,
     inc_topic, topic_hits,
-    remember_resource, last_resource
+    remember_resource, last_resource,
 )
-from app.prompts   import PROMPTS, DICTIONARY_PROMPTS, SENTENCE_ANALYSIS_PROMPTS, CONJUGATION_PROMPTS, CROSSWORD_PROMPTS
-from app.resources import match_resources
+from .prompts import (
+    PROMPTS,
+    DICTIONARY_PROMPTS,
+    SENTENCE_ANALYSIS_PROMPTS,
+    CONJUGATION_PROMPTS,
+    CROSSWORD_PROMPTS,
+)
+from .resources import match_resources
 
 # ───────── config & constants ─────────
 HISTORY_WINDOW          = 6
@@ -316,7 +340,7 @@ async def chat(body: ChatRequest):
 # ===============================================================
 # 2. Mentor endpoint
 # ===============================================================
-from app.dummy_store import (
+from .dummy_store import (
     save_pending_calendar_event,
     get_pending_calendar_event,
     clear_pending_calendar_event,
@@ -1730,7 +1754,7 @@ async def clear_conjugation_cache():
     return {"message": f"Cleared {cache_size} cached conjugation entries"}
 
 # ===============================================================
-# 7. Crossword  —  UPDATED
+# 7. Crossword  
 # ===============================================================
 
 # Add these imports at the top if not already present
@@ -1774,14 +1798,27 @@ FALLBACK_JA = [
     "どうぶつ","きょうしつ","しんかんせん","きっさてん","にんじん","すいぞくかん","たいいく",
     "えんそく","しょうがつ","おとしだま","ゆうびんきょく","りょうり","にっき","びよういん",
     "でんきゅう","すいどう","じどうしゃ","てんらんかい","こうさてん","おんがくかい","こくばん",
-    "せんせい","ともだち","けんがく","ぶんぼうぐ","きょうかしょ","たいいくかん","こうつうあんぜん"
+    "せんせい","ともだち","けんがく","ぶんぼうぐ","きょうかしょ","たいいくかん","こうつうあんぜん",
+    "れいぞうこ","せんたくき","そうじき","かいだん","さらあらい","ふうせん","おにぎり","たまごやき",
+    "みそしる","やきそば","りんごあめ","ゆうえんち","どうぶつえん","びじゅつかん","ばすてい",
+    "しゅうてん","たいよう","にじいろ","こおりみず","えんにち","おりがみ","はなび","ほしぞら",
+    "ながぐつ","かさたて","すいはんき","えほん","のーと","けしごむ","てがみ","ひだまり",
+    "とけい","めざまし","きょうかい","みちしるべ","かわらばん","こうさてんき","はなや",
+    "さくらもち","みずぎ","ぷーるさいど","すなば","はしご","ひるやすみ","ゆうがた",
+    "りす","かめ","はくぶつかん","ぱんや","けーきや"
 ]
 
 FALLBACK_KO = [
     "놀이공원","지하철역","버스정류장","휴대전화","전화번호","초등학교","고등학교","어린이집",
     "유치원생","자동판매기","세탁기방","보건소장","영화관람","과학시간","문예활동","체육대회",
     "도서관장","운동경기","생활안전","교통안전","자전거도로","축구경기장","농구경기장","수영수업",
-    "피아노학원","미술학원","컴퓨터실","우편번호","일기예보","환경보호","동물병원","소방서장"
+    "피아노학원","미술학원","컴퓨터실","우편번호","일기예보","환경보호","동물병원","소방서장",
+    "냉장고","세탁기","청소기","전등스위치","문손잡이","쓰레기통","주전자","책가방","볼펜",
+    "지우개","알람시계","우유팩","빵가게","과일가게","편의점","체육관","운동장","과학실험",
+    "독서시간","급식시간","컴퓨터수업","음악연습","쇼핑센터","기차역앞","우체국앞","바닷바람",
+    "무지개색","눈사람","해변모래","자전거길","버스노선도","지하상가","놀이터","미끄럼틀",
+    "그네","정원가꾸기","봄나들이","놀이터안전","야간조명","책읽기","분리수거","도예교실",
+    "한글카드","색종이","만화책","수학노트","장보기","비누방울","아이스티","도시락통"
 ]
 
 def _has_middle_overlap(a: str, b: str) -> bool:
@@ -2269,11 +2306,24 @@ def _try_layout(words: List[str], word_data: Dict, date: str, language: str, gri
     grid = [["." for _ in range(grid_size)] for _ in range(grid_size)]
     placed_words: List[CrosswordWord] = []
 
+    # mapping from (start_row, start_col) -> clue number
+    start_cell_numbers: dict[tuple[int, int], int] = {}
+    next_number = 1
+
+    def assign_number(start_r: int, start_c: int) -> int:
+        nonlocal next_number
+        key = (start_r, start_c)
+        if key not in start_cell_numbers:
+            start_cell_numbers[key] = next_number
+            next_number += 1
+        return start_cell_numbers[key]
+
     # 1) Place first anchor ACROSS centered
     first = wlist[0]
     r0 = grid_size // 2
     c0 = (grid_size - len(first)) // 2
     place_word_in_grid(grid, first, r0, c0, "across")
+    anchor_num = assign_number(r0, c0)
     placed_words.append(
         CrosswordWord(
             word=first,
@@ -2284,10 +2334,10 @@ def _try_layout(words: List[str], word_data: Dict, date: str, language: str, gri
             start_row=r0,
             start_col=c0,
             direction="across",
-            number=1,
+            number=anchor_num,
         )
     )
-    next_number = 2
+    
 
     # 2) Choose BEST second word (from remaining) that intersects first going DOWN
     best = None
@@ -2311,6 +2361,7 @@ def _try_layout(words: List[str], word_data: Dict, date: str, language: str, gri
 
     _, _, second_word, r2, c2 = best
     place_word_in_grid(grid, second_word, r2, c2, "down")
+    num_second = assign_number(r2, c2)
     placed_words.append(
         CrosswordWord(
             word=second_word,
@@ -2321,10 +2372,9 @@ def _try_layout(words: List[str], word_data: Dict, date: str, language: str, gri
             start_row=r2,
             start_col=c2,
             direction="down",
-            number=next_number,
+            number=num_second,
         )
     )
-    next_number += 1
 
     # 3) Deterministic shuffle of remaining words, but bias by connectivity potential
     remaining = [w for w in wlist[1:] if w != second_word]
@@ -2358,6 +2408,7 @@ def _try_layout(words: List[str], word_data: Dict, date: str, language: str, gri
         for score, _tb, nr, nc, dirn in candidates:  # try ALL
             if can_place_word_strict(grid, w, nr, nc, dirn, grid_size, require_overlap=True):
                 place_word_in_grid(grid, w, nr, nc, dirn)
+                num_for_word = assign_number(nr, nc)
                 placed_words.append(
                     CrosswordWord(
                         word=w,
@@ -2368,10 +2419,9 @@ def _try_layout(words: List[str], word_data: Dict, date: str, language: str, gri
                         start_row=nr,
                         start_col=nc,
                         direction=dirn,
-                        number=next_number,
+                        number=num_for_word,
                     )
                 )
-                next_number += 1
                 placed = True
                 break
         if not placed:
@@ -2481,34 +2531,55 @@ def create_crossword_grid_fallback(word_data: Dict) -> Tuple[List[List[str]], Li
     return grid, placed_words
 
 # ─── Daily puzzle cache ─────────────────────────────────────────
-CACHE_DIR = Path("./daily_crossword_cache")
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-def _cache_key(date: str, language: str) -> str:
-    return f"{date}:{language}"
-
-def _cache_path(date: str, language: str) -> Path:
-    # stable filename
-    h = hashlib.sha256(_cache_key(date, language).encode()).hexdigest()[:16]
-    return CACHE_DIR / f"{language}_{date}_{h}.json"
+def _crossword_doc_id(date: str, language: str) -> str:
+    return f"{language}_{date}"  # e.g. "japanese_2025-12-10"
 
 def load_cached_puzzle(date: str, language: str) -> dict | None:
-    p = _cache_path(date, language)
-    if p.exists():
-        try:
-            with p.open("r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
-    return None
+    if _db is None:
+        return None
+
+    doc_ref = _db.collection(CROSSWORD_COLLECTION).document(
+        _crossword_doc_id(date, language)
+    )
+    snap = doc_ref.get()
+    if not snap.exists:
+        return None
+
+    data = snap.to_dict() or {}
+    data.setdefault("id", f"{date}_{language}")
+    data.setdefault("date", date)
+    data.setdefault("language", language)
+
+    # 🔁 Rebuild grid from serialized form if needed
+    grid_rows = data.get("grid_rows")
+    if grid_rows and "grid" not in data:
+        data["grid"] = [[ch for ch in row] for row in grid_rows]
+
+    return data
 
 def save_cached_puzzle(date: str, language: str, puzzle_dict: dict) -> None:
-    p = _cache_path(date, language)
-    try:
-        with p.open("w", encoding="utf-8") as f:
-            json.dump(puzzle_dict, f, ensure_ascii=False)
-    except Exception:
-        pass
+    if _db is None:
+        return
+
+    doc_id = _crossword_doc_id(date, language)
+    doc_ref = _db.collection(CROSSWORD_COLLECTION).document(doc_id)
+
+    payload = dict(puzzle_dict)
+    payload.setdefault("id", f"{date}_{language}")
+    payload.setdefault("date", date)
+    payload.setdefault("language", language)
+
+    # 🔁 Serialize grid to Firestore-safe format (no nested arrays)
+    grid = payload.get("grid")
+    if grid is not None:
+        # grid is List[List[str]] → convert each row to a string
+        payload["grid_rows"] = ["".join(row) for row in grid]
+        # remove nested array version before writing
+        payload.pop("grid", None)
+
+    doc_ref.set(payload)
+    print(f"✅ Saved crossword {doc_id} to Firestore")
+
 
 @app.post("/crossword/daily")
 async def get_daily_crossword(body: CrosswordRequest):
@@ -2580,8 +2651,35 @@ class WordathonResponse(BaseModel):
     word_clue: Optional[str] = None
 
 # Word-a-thon cache
-WORDATHON_CACHE_DIR = Path("./daily_wordathon_cache")
-WORDATHON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+def _wordathon_doc_id(date: str, language: str) -> str:
+    return f"{language}_{date}"
+
+def load_cached_wordathon(date: str, language: str) -> dict | None:
+    if _db is None:
+        return None
+
+    doc_ref = _db.collection(WORDATHON_COLLECTION).document(
+        _wordathon_doc_id(date, language)
+    )
+    snap = doc_ref.get()
+    return snap.to_dict() if snap.exists else None
+
+
+def save_cached_wordathon(date: str, language: str, word_dict: dict) -> None:
+    if _db is None:
+        return
+
+    doc_id = _wordathon_doc_id(date, language)
+    doc_ref = _db.collection(WORDATHON_COLLECTION).document(doc_id)
+
+    payload = dict(word_dict)
+    payload.setdefault("id", f"wordathon_{date}_{language}")
+    payload.setdefault("date", date)
+    payload.setdefault("language", language)
+
+    doc_ref.set(payload)
+    print(f"✅ Saved Word-a-thon {doc_id} to Firestore")
+
 
 # ---- Hangul → compatibility jamo helpers ----
 S_BASE, L_BASE, V_BASE, T_BASE = 0xAC00, 0x1100, 0x1161, 0x11A7
@@ -2628,29 +2726,6 @@ def is_all_hangul_syllables(text: str) -> bool:
         if not (0xAC00 <= ord(ch) <= 0xD7A3):  # composed Hangul syllables only
             return False
     return True
-
-
-def _wordathon_cache_path(date: str, language: str) -> Path:
-    h = hashlib.sha256(f"{date}:{language}:wordathon".encode()).hexdigest()[:16]
-    return WORDATHON_CACHE_DIR / f"wordathon_{language}_{date}_{h}.json"
-
-def load_cached_wordathon(date: str, language: str) -> dict | None:
-    p = _wordathon_cache_path(date, language)
-    if p.exists():
-        try:
-            with p.open("r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
-    return None
-
-def save_cached_wordathon(date: str, language: str, word_dict: dict) -> None:
-    p = _wordathon_cache_path(date, language)
-    try:
-        with p.open("w", encoding="utf-8") as f:
-            json.dump(word_dict, f, ensure_ascii=False)
-    except Exception:
-        pass
 
 async def generate_wordathon_word(language: str, date: str) -> dict:
     """

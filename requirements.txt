@@ -1,7 +1,7 @@
 # ── core framework ────────────────────────────
 fastapi==0.111.0
-uvicorn[standard]==0.29.0         # pulls uvloop/httptools/watchfiles automatically
-python-multipart==0.0.20          # needed for file uploads (voice_chat)
+uvicorn[standard]==0.29.0
+python-multipart==0.0.20
 
 # ── OpenAI / LLM client ───────────────────────
 openai==1.95.1
@@ -11,23 +11,23 @@ chromadb==1.0.15
 numpy==2.3.1
 
 # ── Google Cloud (Firestore) stack ────────────
-google-cloud-firestore==2.15.0    # ↳ pulls google-api-core, google-auth, etc.
-protobuf==4.25.3                  # compatible upper-bound (<5) for Firestore
+protobuf==4.25.3
 grpcio==1.73.1
 grpcio-status==1.62.3
 proto-plus==1.26.1
 googleapis-common-protos==1.70.0
+firebase-admin==6.6.0
 
 # ── Utilities ────────────────────────────────
 requests==2.32.4
-python-dotenv==1.0.1               # read .env for secrets
+python-dotenv==1.0.1
 pydantic==2.11.7
 typing_extensions==4.14.1
 anyio==4.9.0
-starlette==0.37.2                  # FastAPI runtime dependency
+starlette==0.37.2
+ujson==5.10.0
 
-# (Optional but handy)
-ujson==5.10.0                      # Fast JSON serializer, ok to drop if unused
+# ── NLP extras you actually import ───────────
 langdetect==1.0.9
 yake==0.6.0
 rapidfuzz==3.13.0
